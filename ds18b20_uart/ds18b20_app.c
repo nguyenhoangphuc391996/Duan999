@@ -245,7 +245,11 @@ HAL_StatusTypeDef Ds18b20Api_EnsureReady(OneWire_Config *cfg, OneWire_Context *c
 
   if (owInitSensorPositions(cfg, ctx, slot->forceRelearn) != HAL_OK) {
     if (slot->ensureReadyLogged == 0U) {
-      itm_print("[DS18B20][ERR] position init failed, waiting and retry...\r\n");
+      if (slot->forceRelearn == 0U) {
+        itm_print("[DS18B20] chua co ban do vi tri - vao Menu > Vi Tri DS18B20 > Hoc vi tri\r\n");
+      } else {
+        itm_print("[DS18B20][ERR] position init failed, waiting and retry...\r\n");
+      }
       slot->ensureReadyLogged = 1U;
     }
     return HAL_ERROR;

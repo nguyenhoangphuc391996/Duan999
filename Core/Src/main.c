@@ -180,7 +180,7 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 	itm_set_library_enabled(ITM_LIB_RTRECD, false);
-	itm_set_library_enabled(ITM_LIB_DS18B20, false);
+	itm_set_library_enabled(ITM_LIB_DS18B20, true);
 	itm_set_library_enabled(ITM_LIB_GLOBAL, true);
 	itm_set_library_enabled(ITM_LIB_SCD41, false);
 
@@ -999,7 +999,7 @@ void StartTaskDS18B20(void *argument)
 	  }
 
 	  ramduds18b20 = uxTaskGetStackHighWaterMark(NULL);
-      osDelay(2000);
+      osDelay(500);
   }
   /* USER CODE END StartTaskDS18B20 */
 }

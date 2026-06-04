@@ -11,8 +11,8 @@
 #define ONEWIRE_HEAT_CONFIRM_DELTA_C 0.5f
 #define ONEWIRE_HEAT_POLL_MS 500U
 #define ONEWIRE_HEAT_TIMEOUT_MS 60000U
-#define ONEWIRE_LEARN_WARMUP_SAMPLES 2U
-#define ONEWIRE_LEARN_WARMUP_DELAY_MS 800U
+#define ONEWIRE_LEARN_WARMUP_SAMPLES 1U
+#define ONEWIRE_LEARN_WARMUP_DELAY_MS 0U
 #define ONEWIRE_HEAT_MIN_ELAPSED_MS 1000U
 #define ONEWIRE_HEAT_REQUIRED_HITS 1U
 #define DS18B20_CFG_RES_12BIT 0x7FU
@@ -394,11 +394,15 @@ HAL_StatusTypeDef owInitSensorPositions(OneWire_Config *cfg, OneWire_Context *ct
     return HAL_ERROR;
   }
 
-  if (forceRelearn == 0U && owLoadPositionMap(cfg, ctx) == HAL_OK) {
-    if (ctx->positionCount >= cfg->maxDevices) {
+  if (forceRelearn == 0U) {
+    if (owLoadPositionMap(cfg, ctx) == HAL_OK && ctx->positionCount >= cfg->maxDevices) {
       itm_print("[DS18B20] position map loaded from flash\r\n");
       return HAL_OK;
     }
+    /* No valid position map and user has not requested learning — do NOT
+     * auto-learn.  Return HAL_ERROR so the caller retries; the user must
+     * navigate to Menu > Vi Tri DS18B20 > Hoc vi tri to start learning. */
+    return HAL_ERROR;
   }
 
   itm_print("[DS18B20] start heating-based position learning\r\n");
