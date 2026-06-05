@@ -236,8 +236,10 @@ typedef struct
     uint8_t           fan_learn_done;         /**< 1 = có dữ liệu học hợp lệ              */
     uint16_t          fan_learned_tach[FAN_LEARN_STEPS]; /**< xung TACH/1 s tại 0%,10%,...,100% */
 
-    /* --- Cảnh báo tốc độ quạt --- */
-    uint8_t           fan_alarm_active;       /**< 1 = đang phát cảnh báo quạt (PB5)      */
+    /* --- Cảnh báo / an toàn quạt --- */
+    uint8_t           fan_alarm_active;       /**< 1 = lệch tốc độ so với đã học (sau 1 phút) */
+    uint8_t           fan_stuck_fault;      /**< 1 = quạt bị kẹt (có PWM nhưng không quay)  */
+    uint8_t           fan_force_off;        /**< 1 = cưỡng bức tắt quạt (an toàn khi kẹt)   */
 
 } app_menu_ctx_t;
 

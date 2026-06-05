@@ -133,6 +133,7 @@ void output_ctrl_snapshot_take(output_ctrl_snapshot_t *s,
 
 	s->fan_learn_active  = (menu->fan_learn_active != 0U);
 	s->fan_learn_pwm_pct = menu->fan_learn_pwm_pct;
+	s->fan_force_off     = (menu->fan_force_off != 0U);
 	s->now_h = menu->time_cfg.hour;
 	s->now_m = menu->time_cfg.minute;
 	osMutexRelease(menu_mutex);
@@ -251,7 +252,11 @@ bool output_ctrl_apply(output_t *h,
 		                                  s->light_stop_h, s->light_stop_m));
 	}
 
-	if (s->fan_learn_active)
+	if (s->fan_force_off)
+	{
+		output_fan_set_percent(h, 0U);
+	}
+	else if (s->fan_learn_active)
 	{
 		output_fan_set_percent(h, s->fan_learn_pwm_pct);
 	}

@@ -43,6 +43,7 @@ typedef struct
 	uint8_t fan_percent;
 	bool    fan_learn_active;    /**< true = learning task đang override quạt */
 	uint8_t fan_learn_pwm_pct;  /**< PWM % do learning task yêu cầu          */
+	bool    fan_force_off;      /**< true = cưỡng bức tắt quạt (kẹt / an toàn) */
 	uint8_t now_h;
 	uint8_t now_m;
 	uint16_t thanh_trung_initial_minutes;

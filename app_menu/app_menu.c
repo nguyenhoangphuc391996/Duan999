@@ -400,14 +400,21 @@ static void render_work1(app_menu_ctx_t *ctx)
 
     {
         char qfan[4];
-        uint8_t pct = get_fan_display_percent(ctx);
-        if (pct >= 100U)
+        if ((ctx->fan_alarm_active != 0U) || (ctx->fan_stuck_fault != 0U))
         {
-            snprintf(qfan, sizeof(qfan), "100");
+            snprintf(qfan, sizeof(qfan), "QER");
         }
         else
         {
-            snprintf(qfan, sizeof(qfan), "Q%02u", (unsigned)pct);
+            uint8_t pct = get_fan_display_percent(ctx);
+            if (pct >= 100U)
+            {
+                snprintf(qfan, sizeof(qfan), "100");
+            }
+            else
+            {
+                snprintf(qfan, sizeof(qfan), "Q%02u", (unsigned)pct);
+            }
         }
         lcd_put_cur(1, 13);
         lcd_send_string(qfan);
