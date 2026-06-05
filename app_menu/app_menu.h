@@ -13,7 +13,8 @@
  *    ├─ Chon che do     -> SCREEN_MODE_SELECT
  *    ├─ Cai dat t/gian  -> SCREEN_TIME_MENU -> SCREEN_TIME_EDIT
  *    ├─ Cai dat MinMax  -> SCREEN_MINMAX_MODE -> PARAM -> FIELD -> EDIT
- *    └─ Vi tri DS18B20  -> SCREEN_DS18B20_POS
+ *    ├─ Vi tri DS18B20  -> SCREEN_DS18B20_POS
+ *    └─ Hoc toc do quat -> SCREEN_FAN_LEARN_MENU -> SCREEN_FAN_LEARN_RUN
  */
 
 #ifndef APP_MENU_H_
@@ -60,6 +61,8 @@ typedef enum
     SCREEN_DS18B20_POS,    /**< Sub-menu vị trí DS18B20                     */
     SCREEN_DS18B20_COUNT,  /**< Chọn số cảm biến DS18B20                    */
     SCREEN_DS18B20_LEARN,  /**< Học vị trí DS18B20 (hiển thị tiến trình)    */
+    SCREEN_FAN_LEARN_MENU, /**< Sub-menu học tốc độ quạt (Hoc / Thoat)      */
+    SCREEN_FAN_LEARN_RUN,  /**< Đang học tốc độ quạt (hiển thị tiến trình) */
     SCREEN_COUNT
 } app_screen_t;
 
@@ -102,6 +105,18 @@ typedef enum
 #define DS18B20_LEARN_SEARCHING  1U  /**< Đang tìm / học vị trí              */
 #define DS18B20_LEARN_DONE       2U  /**< Học xong, đã lưu Flash             */
 #define DS18B20_LEARN_ERROR      3U  /**< Hết thời gian, không tìm thấy đủ CB*/
+
+/* =========================================================================
+ * Fan learn constants
+ * ========================================================================= */
+
+/** Số bước học: 0%, 10%, 20%, ..., 100% (11 bước). */
+#define FAN_LEARN_STEPS          11U
+
+#define FAN_LEARN_IDLE           0U  /**< Chưa học / không trong quá trình học */
+#define FAN_LEARN_RUNNING        1U  /**< Đang học                             */
+#define FAN_LEARN_DONE           2U  /**< Học xong, có dữ liệu hợp lệ         */
+#define FAN_LEARN_ERROR          3U  /**< Lỗi                                  */
 
 /* =========================================================================
  * Settings structures
@@ -211,6 +226,18 @@ typedef struct
     volatile uint8_t relearn_retry_count;    /**< Số lần thử (timeout detection)        */
     volatile uint8_t relearn_current_pos;    /**< Vị trí đang học (1-based); 0=warmup   */
     volatile uint8_t relearn_pos_found;      /**< 0=đang hỏi người dùng, 1=đã tìm thấy */
+
+    /* --- Học tốc độ quạt (shared với TaskFanLearn) --- */
+    volatile uint8_t  fan_learn_req;          /**< 1 = bắt đầu học ngay                   */
+    volatile uint8_t  fan_learn_phase;        /**< FAN_LEARN_* constants                   */
+    volatile uint8_t  fan_learn_step;         /**< Bước hiện tại (0..FAN_LEARN_STEPS-1)   */
+    volatile uint8_t  fan_learn_active;       /**< 1 = đang học, override fan control      */
+    volatile uint8_t  fan_learn_pwm_pct;      /**< PWM % mà learning task yêu cầu đặt     */
+    uint8_t           fan_learn_done;         /**< 1 = có dữ liệu học hợp lệ              */
+    uint16_t          fan_learned_tach[FAN_LEARN_STEPS]; /**< xung TACH/1 s tại 0%,10%,...,100% */
+
+    /* --- Cảnh báo tốc độ quạt --- */
+    uint8_t           fan_alarm_active;       /**< 1 = đang phát cảnh báo quạt (PB5)      */
 
 } app_menu_ctx_t;
 

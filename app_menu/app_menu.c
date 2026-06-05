@@ -70,8 +70,15 @@ static const char * const g_main_menu_items[] = {
     "Cai dat t/gian",
     "Cai dat MinMax",
     "Vi tri DS18B20",
+    "Hoc toc do quat",
 };
-#define MAIN_MENU_COUNT   4U
+#define MAIN_MENU_COUNT   5U
+
+static const char * const g_fan_learn_items[] = {
+    "Hoc",
+    "Thoat",
+};
+#define FAN_LEARN_ITEM_COUNT  2U
 
 static const char * const g_mode_items[] = {
     "Chay to",
@@ -573,6 +580,46 @@ static void render_work3(app_menu_ctx_t *ctx)
     }
 }
 
+static void render_fan_learn_menu(app_menu_ctx_t *ctx)
+{
+    render_title_item("Toc do quat", g_fan_learn_items, ctx->cursor);
+}
+
+static void render_fan_learn_run(app_menu_ctx_t *ctx)
+{
+    char tmp[32];
+
+    s_scroll_tick++;
+
+    switch (ctx->fan_learn_phase)
+    {
+    case FAN_LEARN_RUNNING:
+        lcd_put_cur(0, 0);
+        lcd_send_line("Dang hoc quat..");
+        snprintf(tmp, sizeof(tmp), "Buoc %u/10 (%u%%)",
+                 (unsigned)ctx->fan_learn_step,
+                 (unsigned)((uint8_t)(ctx->fan_learn_step * 10U)));
+        lcd_put_cur(1, 0);
+        lcd_send_line(tmp);
+        break;
+
+    case FAN_LEARN_DONE:
+        lcd_put_cur(0, 0);
+        lcd_send_line("Hoc quat xong!");
+        lcd_put_cur(1, 0);
+        lcd_send_line("Ngan=thoat");
+        break;
+
+    case FAN_LEARN_ERROR:
+    default:
+        lcd_put_cur(0, 0);
+        lcd_send_line("Loi hoc quat!");
+        lcd_put_cur(1, 0);
+        lcd_send_line("Ngan=thoat");
+        break;
+    }
+}
+
 static void render_main_menu(app_menu_ctx_t *ctx)
 {
     render_title_item("< Menu >", g_main_menu_items, ctx->cursor);
@@ -1047,10 +1094,11 @@ static void handle_main_menu(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
     case RTRECD_EVENT_BUTTON_SHORT:
         switch (ctx->cursor)
         {
-        case 0U: nav_push(ctx, SCREEN_MODE_SELECT); break;
-        case 1U: nav_push(ctx, SCREEN_TIME_MENU);   break;
-        case 2U: nav_push(ctx, SCREEN_MINMAX_MODE); break;
-        case 3U: nav_push(ctx, SCREEN_DS18B20_POS); break;
+        case 0U: nav_push(ctx, SCREEN_MODE_SELECT);    break;
+        case 1U: nav_push(ctx, SCREEN_TIME_MENU);      break;
+        case 2U: nav_push(ctx, SCREEN_MINMAX_MODE);    break;
+        case 3U: nav_push(ctx, SCREEN_DS18B20_POS);    break;
+        case 4U: nav_push(ctx, SCREEN_FAN_LEARN_MENU); break;
         default: break;
         }
         break;
@@ -1520,6 +1568,64 @@ static void handle_ds18b20_learn(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
     }
 }
 
+static void handle_fan_learn_menu(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
+{
+    switch (ev)
+    {
+    case RTRECD_EVENT_ROTATE_CW:
+        list_cw(ctx, FAN_LEARN_ITEM_COUNT);
+        break;
+    case RTRECD_EVENT_ROTATE_CCW:
+        list_ccw(ctx);
+        break;
+    case RTRECD_EVENT_BUTTON_SHORT:
+        switch (ctx->cursor)
+        {
+        case 0U: /* Hoc */
+            ctx->fan_learn_req   = 1U;
+            ctx->fan_learn_phase = FAN_LEARN_RUNNING;
+            ctx->fan_learn_step  = 0U;
+            nav_push(ctx, SCREEN_FAN_LEARN_RUN);
+            break;
+        case 1U: /* Thoat */
+            nav_pop(ctx);
+            break;
+        default:
+            break;
+        }
+        break;
+    case RTRECD_EVENT_BUTTON_LONG:
+        nav_pop(ctx);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_fan_learn_run(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
+{
+    switch (ev)
+    {
+    case RTRECD_EVENT_BUTTON_SHORT:
+        if (ctx->fan_learn_phase == FAN_LEARN_DONE ||
+            ctx->fan_learn_phase == FAN_LEARN_ERROR)
+        {
+            ctx->fan_learn_phase = FAN_LEARN_IDLE;
+            nav_pop(ctx);
+        }
+        break;
+    case RTRECD_EVENT_BUTTON_LONG:
+        /* Thoát khẩn cấp: hủy học, trả quyền điều khiển quạt về output_ctrl */
+        ctx->fan_learn_req    = 0U;
+        ctx->fan_learn_phase  = FAN_LEARN_IDLE;
+        ctx->fan_learn_active = 0U;
+        nav_pop(ctx);
+        break;
+    default:
+        break;
+    }
+}
+
 /* =========================================================================
  * Public API
  * ========================================================================= */
@@ -1580,7 +1686,7 @@ void app_menu_init(app_menu_ctx_t *ctx)
 
     /* --- [1] Kich Dinh ghim: T 28-32, A 84-94, CO2 700-1200, den 24/24 --- */
     ctx->mode_cfg[1].nhiet_do.min = 28;
-    ctx->mode_cfg[1].nhiet_do.max = 32;
+    ctx->mode_cfg[1].nhiet_do.max = 31;
     ctx->mode_cfg[1].do_am.min    = 84;
     ctx->mode_cfg[1].do_am.max    = 94;
     ctx->mode_cfg[1].co2.min      = 700;
@@ -1590,7 +1696,7 @@ void app_menu_init(app_menu_ctx_t *ctx)
 
     /* --- [2] Dinh ghim: T 28-32, A 84-94, CO2 700-1200, den khong su dung --- */
     ctx->mode_cfg[2].nhiet_do.min = 28;
-    ctx->mode_cfg[2].nhiet_do.max = 32;
+    ctx->mode_cfg[2].nhiet_do.max = 31;
     ctx->mode_cfg[2].do_am.min    = 84;
     ctx->mode_cfg[2].do_am.max    = 94;
     ctx->mode_cfg[2].co2.min      = 700;
@@ -1600,7 +1706,7 @@ void app_menu_init(app_menu_ctx_t *ctx)
 
     /* --- [3] Qua the: T 28-32, CO2 700-1200, do_am khong su dung, den khong su dung --- */
     ctx->mode_cfg[3].nhiet_do.min    = 28;
-    ctx->mode_cfg[3].nhiet_do.max    = 32;
+    ctx->mode_cfg[3].nhiet_do.max    = 31;
     ctx->mode_cfg[3].co2.min         = 700;
     ctx->mode_cfg[3].co2.max         = 1200;
     ctx->mode_cfg[3].do_am_disabled  = 1U;   /* Qua the: không dùng máy tạo ẩm */
@@ -1639,6 +1745,8 @@ void app_menu_handle_event(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
     case SCREEN_DS18B20_POS:    handle_ds18b20_pos(ctx, ev);    break;
     case SCREEN_DS18B20_COUNT:  handle_ds18b20_count(ctx, ev); break;
     case SCREEN_DS18B20_LEARN:  handle_ds18b20_learn(ctx, ev); break;
+    case SCREEN_FAN_LEARN_MENU: handle_fan_learn_menu(ctx, ev); break;
+    case SCREEN_FAN_LEARN_RUN:  handle_fan_learn_run(ctx, ev);  break;
     default: break;
     }
 }
@@ -1646,12 +1754,17 @@ void app_menu_handle_event(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 void app_menu_render(app_menu_ctx_t *ctx)
 {
     /*
-     * Màn hình học vị trí: luôn vẽ lại khi đang tìm kiếm (không dùng dirty)
-     * để TaskLCD liên tục cập nhật trạng thái từ TaskDS18B20.
+     * Các màn hình tiến trình: luôn vẽ lại (không dùng dirty) để TaskLCD
+     * liên tục cập nhật trạng thái từ task nền (DS18B20 / FanLearn).
      */
     if (ctx->screen == SCREEN_DS18B20_LEARN)
     {
         render_ds18b20_learn(ctx);
+        return;
+    }
+    if (ctx->screen == SCREEN_FAN_LEARN_RUN)
+    {
+        render_fan_learn_run(ctx);
         return;
     }
 
@@ -1671,9 +1784,11 @@ void app_menu_render(app_menu_ctx_t *ctx)
     case SCREEN_MINMAX_PARAM: render_minmax_param(ctx); break;
     case SCREEN_MINMAX_FIELD: render_minmax_field(ctx); break;
     case SCREEN_MINMAX_EDIT:  render_minmax_edit(ctx);  break;
-    case SCREEN_DS18B20_POS:   render_ds18b20_pos(ctx);   break;
-    case SCREEN_DS18B20_COUNT: render_ds18b20_count(ctx); break;
-    case SCREEN_DS18B20_LEARN: render_ds18b20_learn(ctx); break;
+    case SCREEN_DS18B20_POS:    render_ds18b20_pos(ctx);    break;
+    case SCREEN_DS18B20_COUNT:  render_ds18b20_count(ctx);  break;
+    case SCREEN_DS18B20_LEARN:  render_ds18b20_learn(ctx);  break;
+    case SCREEN_FAN_LEARN_MENU: render_fan_learn_menu(ctx); break;
+    case SCREEN_FAN_LEARN_RUN:  render_fan_learn_run(ctx);  break;
     default: break;
     }
 }

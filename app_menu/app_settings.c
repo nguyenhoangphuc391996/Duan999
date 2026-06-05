@@ -32,6 +32,10 @@ typedef struct __attribute__((packed))
     uint8_t         active_mode;
     uint8_t         _pad[2];          /* giữ mode_cfg căn chỉnh 4-byte */
     mode_settings_t mode_cfg[5];      /* 5 chế độ (Chay to/Kich Dinh ghim/Dinh ghim/Qua the/Thanh trung) */
+    /* v9: dữ liệu học tốc độ quạt */
+    uint16_t        fan_learned_tach[FAN_LEARN_STEPS]; /* xung TACH/1 s tại 0%,10%,...,100% */
+    uint8_t         fan_learn_done;   /* 1 = dữ liệu hợp lệ */
+    uint8_t         _pad_fan;         /* căn chỉnh chẵn cho halfword write */
     uint32_t        checksum;
 } app_settings_flash_t;
 
@@ -75,10 +79,10 @@ void app_settings_load(app_menu_ctx_t *ctx)
 
     /* Kiểm tra magic */
     if (fs->magic != APP_SETTINGS_MAGIC)          valid = false;
-    /* Kiểm tra version (v8 hiện tại; v7 được migrate) */
+    /* Kiểm tra version (v9 hiện tại; v7 và v8 được migrate) */
     if (valid && (fs->version != APP_SETTINGS_VERSION))
     {
-        if (fs->version != 7U)
+        if (fs->version != 7U && fs->version != 8U)
         {
             valid = false;
         }
@@ -98,7 +102,7 @@ void app_settings_load(app_menu_ctx_t *ctx)
     ctx->active_mode = (app_mode_t)fs->active_mode;
     memcpy(ctx->mode_cfg, fs->mode_cfg, sizeof(ctx->mode_cfg));
 
-    /* v7 → v8: toc_do_quat cũ mặc định 20% → chuẩn hoá 100% */
+    /* v7 → v8/v9: toc_do_quat cũ mặc định 20% → chuẩn hoá 100% */
     if (fs->version == 7U)
     {
         for (uint8_t i = 0U; i <= (uint8_t)MODE_QUA_THE; i++)
@@ -119,6 +123,14 @@ void app_settings_load(app_menu_ctx_t *ctx)
         }
     }
 
+    /* v9: nạp dữ liệu học tốc độ quạt (v7/v8 không có → giữ mặc định 0) */
+    if (fs->version == (uint8_t)APP_SETTINGS_VERSION)
+    {
+        memcpy(ctx->fan_learned_tach, fs->fan_learned_tach,
+               sizeof(ctx->fan_learned_tach));
+        ctx->fan_learn_done = fs->fan_learn_done;
+    }
+
     flash_log("[FLASH] Load settings OK");
 }
 
@@ -134,6 +146,9 @@ void app_settings_save(app_menu_ctx_t *ctx)
     s.version     = APP_SETTINGS_VERSION;
     s.active_mode = (uint8_t)ctx->active_mode;
     memcpy(s.mode_cfg, ctx->mode_cfg, sizeof(s.mode_cfg));
+    memcpy(s.fan_learned_tach, ctx->fan_learned_tach, sizeof(s.fan_learned_tach));
+    s.fan_learn_done = ctx->fan_learn_done;
+    s._pad_fan       = 0U;
     s.checksum    = calc_checksum(&s);
 
     /* ---- Ghi Flash ---- */

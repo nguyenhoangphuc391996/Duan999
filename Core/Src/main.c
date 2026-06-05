@@ -28,6 +28,7 @@
 #include "scd4x_i2c.h"
 #include "ds18b20_app.h"
 #include "app_menu.h"
+#include "app_settings.h"
 #include "output.h"
 #include "output_control.h"
 #include <string.h>
@@ -58,6 +59,7 @@ RTC_HandleTypeDef hrtc;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart1;
 
@@ -95,6 +97,13 @@ const osThreadAttr_t TaskOutput_attributes = {
   .name = "TaskOutput",
   .stack_size = 200 * 4,
   .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for TaskFanLearn */
+osThreadId_t TaskFanLearnHandle;
+const osThreadAttr_t TaskFanLearn_attributes = {
+  .name = "TaskFanLearn",
+  .stack_size = 300 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
 };
 /* Definitions for QueueEC11 */
 osMessageQueueId_t QueueEC11Handle;
@@ -143,7 +152,10 @@ static rtrecd_t g_rtrecd = {
 static app_menu_ctx_t g_menu_ctx;
 static output_t g_output;
 
-uint32_t ramduinput, ramduui, ramdulcd, ramduds18b20, ramduoutput;
+/* Bộ đếm xung TACH (PB4 / TIM3_CH1): tăng trong HAL_TIM_IC_CaptureCallback */
+static volatile uint32_t g_tach_pulse_count = 0U;
+
+uint32_t ramduinput, ramduui, ramdulcd, ramduds18b20, ramduoutput, ramdufanlearn;
 uint32_t free_heap __attribute__((unused));
 /* USER CODE END PV */
 
@@ -156,11 +168,13 @@ static void MX_USART1_UART_Init(void);
 static void MX_RTC_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
 void StartTaskInput(void *argument);
 void StartTaskUI(void *argument);
 void StartTaskLCD(void *argument);
 void StartTaskDS18B20(void *argument);
 void StartTaskOutput(void *argument);
+void StartTaskFanLearn(void *argument);
 
 /* USER CODE BEGIN PFP */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
@@ -179,10 +193,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	itm_set_library_enabled(ITM_LIB_RTRECD, false);
+	itm_set_library_enabled(ITM_LIB_RTRECD, true);
 	itm_set_library_enabled(ITM_LIB_DS18B20, true);
 	itm_set_library_enabled(ITM_LIB_GLOBAL, true);
-	itm_set_library_enabled(ITM_LIB_SCD41, false);
+	itm_set_library_enabled(ITM_LIB_SCD41, true);
 
 
   /* USER CODE END 1 */
@@ -211,6 +225,7 @@ int main(void)
   MX_RTC_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -271,6 +286,9 @@ int main(void)
 
   /* creation of TaskOutput */
   TaskOutputHandle = osThreadNew(StartTaskOutput, NULL, &TaskOutput_attributes);
+
+  /* creation of TaskFanLearn */
+  TaskFanLearnHandle = osThreadNew(StartTaskFanLearn, NULL, &TaskFanLearn_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   free_heap = xPortGetFreeHeapSize();
@@ -634,6 +652,64 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 3;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 65535;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_IC_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_FALLING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 8;
+  if (HAL_TIM_IC_ConfigChannel(&htim3, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+
+}
+
+/**
   * @brief USART1 Initialization Function
   * @param None
   * @retval None
@@ -685,7 +761,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_5, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8|GPIO_PIN_12, GPIO_PIN_RESET);
@@ -696,8 +772,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_15;
+  /*Configure GPIO pins : PB15 PB5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_15|GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -733,6 +809,14 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   else if (GPIO_Pin == GPIO_PIN_14)
   {
     rtrecd_isr_sw(&g_rtrecd);
+  }
+}
+
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+  if (htim->Instance == TIM3)
+  {
+    g_tach_pulse_count++;
   }
 }
 
@@ -1049,6 +1133,201 @@ void StartTaskOutput(void *argument)
     ramduoutput = uxTaskGetStackHighWaterMark(NULL);
   }
   /* USER CODE END StartTaskOutput */
+}
+
+/* USER CODE BEGIN Header_StartTaskFanLearn */
+/**
+* @brief Function implementing the TaskFanLearn thread.
+*        - Học tốc độ quạt: tăng PWM từ 0→100%, đo xung TACH tại mỗi bước 10%.
+*        - Giám sát: so sánh tốc độ thực tế vs đã học; nếu lệch >25% liên tục
+*          trong 1 phút → kích PB5 (còi cảnh báo).
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTaskFanLearn */
+void StartTaskFanLearn(void *argument)
+{
+  /* USER CODE BEGIN StartTaskFanLearn */
+
+  /* Khởi động TIM3 Input Capture interrupt để đếm xung TACH trên PB4 */
+  HAL_NVIC_SetPriority(TIM3_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(TIM3_IRQn);
+  HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_1);
+
+  static uint8_t  s_fan_error_count  = 0U;   /* số chu kỳ 5 s liên tiếp có lỗi */
+  uint32_t monitor_last_tick = osKernelGetTickCount();
+
+  for (;;)
+  {
+    /* ================================================================
+     * KHỐI HỌC TỐC ĐỘ QUẠT
+     * ============================================================= */
+    if (g_menu_ctx.fan_learn_req)
+    {
+      g_menu_ctx.fan_learn_req    = 0U;
+      g_menu_ctx.fan_learn_active = 1U;
+      g_menu_ctx.fan_learn_done   = 0U;
+      s_fan_error_count           = 0U;
+
+      /* Tắt cảnh báo trong khi học */
+      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
+      osMutexAcquire(MutexMenuHandle, osWaitForever);
+      g_menu_ctx.fan_alarm_active = 0U;
+      osMutexRelease(MutexMenuHandle);
+
+      uint8_t step;
+      for (step = 0U; step < FAN_LEARN_STEPS; step++)
+      {
+        /* Kiểm tra nếu user đã hủy qua nút dài */
+        if (!g_menu_ctx.fan_learn_active)
+        {
+          break;
+        }
+
+        uint8_t duty = (uint8_t)(step * 10U);
+
+        osMutexAcquire(MutexMenuHandle, osWaitForever);
+        g_menu_ctx.fan_learn_step    = step;
+        g_menu_ctx.fan_learn_pwm_pct = duty;
+        osMutexRelease(MutexMenuHandle);
+
+        /* Thời gian ổn định:
+         *  - Step 0 (0%): 500 ms – quạt dừng
+         *  - Step 1-2 (10-20%): 4 s – vùng khởi động, quạt cần thêm thời gian
+         *  - Step 3-4 (30-40%): 3 s
+         *  - Step 5+ (50-100%): 2 s
+         */
+        if (step == 0U)
+        {
+          osDelay(500U);
+        }
+        else if (duty <= 20U)
+        {
+          osDelay(4000U);
+        }
+        else if (duty <= 40U)
+        {
+          osDelay(3000U);
+        }
+        else
+        {
+          osDelay(2000U);
+        }
+
+        if (!g_menu_ctx.fan_learn_active) { break; }
+
+        /* Đếm xung TACH trong 1000 ms */
+        uint32_t cnt_start = g_tach_pulse_count;
+        osDelay(1000U);
+        uint32_t cnt_end   = g_tach_pulse_count;
+        uint32_t pulses    = cnt_end - cnt_start;
+
+        osMutexAcquire(MutexMenuHandle, osWaitForever);
+        g_menu_ctx.fan_learned_tach[step] =
+            (pulses > 0xFFFFU) ? (uint16_t)0xFFFFU : (uint16_t)pulses;
+        osMutexRelease(MutexMenuHandle);
+      }
+
+      /* Kết thúc học (hoàn thành hoặc bị hủy) */
+      osMutexAcquire(MutexMenuHandle, osWaitForever);
+      g_menu_ctx.fan_learn_active  = 0U;
+      g_menu_ctx.fan_learn_pwm_pct = 0U;
+
+      if (step == FAN_LEARN_STEPS)
+      {
+        /* Học thành công toàn bộ 11 bước */
+        g_menu_ctx.fan_learn_done  = 1U;
+        g_menu_ctx.fan_learn_phase = FAN_LEARN_DONE;
+        /* Lưu ngay vào Flash – không cần chờ user nhấn dài */
+        app_settings_save(&g_menu_ctx);
+      }
+      else
+      {
+        /* Bị hủy giữa chừng */
+        g_menu_ctx.fan_learn_phase = FAN_LEARN_IDLE;
+      }
+      osMutexRelease(MutexMenuHandle);
+
+      /* Reset bộ đếm lỗi để bắt đầu giám sát sạch */
+      s_fan_error_count = 0U;
+      monitor_last_tick = osKernelGetTickCount();
+    }
+
+    /* ================================================================
+     * KHỐI GIÁM SÁT TỐC ĐỘ QUẠT (5 s/lần)
+     * ============================================================= */
+    if ((osKernelGetTickCount() - monitor_last_tick) >= 5000U)
+    {
+      osMutexAcquire(MutexMenuHandle, osWaitForever);
+      uint8_t fan_done   = g_menu_ctx.fan_learn_done;
+      uint8_t fan_active = g_menu_ctx.fan_learn_active;
+
+      /* Duty % hiện tại theo chế độ đang chạy */
+      uint8_t current_duty = 0U;
+      if ((g_menu_ctx.active_mode <= MODE_QUA_THE) && !fan_active)
+      {
+        current_duty = g_menu_ctx.mode_cfg[g_menu_ctx.active_mode].toc_do_quat;
+      }
+
+      uint16_t learned_arr[FAN_LEARN_STEPS];
+      memcpy(learned_arr, g_menu_ctx.fan_learned_tach, sizeof(learned_arr));
+      osMutexRelease(MutexMenuHandle);
+
+      if (fan_done && !fan_active && (current_duty > 0U))
+      {
+        /* Xác định bước học gần nhất (làm tròn đến 10%) */
+        uint8_t step = (uint8_t)((current_duty + 5U) / 10U);
+        if (step >= FAN_LEARN_STEPS) { step = FAN_LEARN_STEPS - 1U; }
+
+        uint16_t learned = learned_arr[step];
+
+        if (learned > 0U)
+        {
+          /* Đếm xung TACH trong 1000 ms */
+          uint32_t cnt_start = g_tach_pulse_count;
+          osDelay(1000U);
+          uint32_t cnt_end   = g_tach_pulse_count;
+          uint32_t pulses    = cnt_end - cnt_start;
+
+          /* Sai lệch tuyệt đối */
+          int32_t diff = (int32_t)pulses - (int32_t)learned;
+          if (diff < 0) { diff = -diff; }
+
+          /* Ngưỡng chấp nhận: ±25% so với tốc độ đã học */
+          uint32_t tolerance = ((uint32_t)learned * 25U) / 100U;
+
+          if ((uint32_t)diff > tolerance)
+          {
+            if (s_fan_error_count < 255U) { s_fan_error_count++; }
+
+            /* 12 × 5 s = 60 s liên tục lỗi → kích cảnh báo */
+            if (s_fan_error_count >= 12U)
+            {
+              HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
+              osMutexAcquire(MutexMenuHandle, osWaitForever);
+              g_menu_ctx.fan_alarm_active = 1U;
+              osMutexRelease(MutexMenuHandle);
+            }
+          }
+          else
+          {
+            /* Tốc độ bình thường → tắt cảnh báo, reset bộ đếm */
+            s_fan_error_count = 0U;
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
+            osMutexAcquire(MutexMenuHandle, osWaitForever);
+            g_menu_ctx.fan_alarm_active = 0U;
+            osMutexRelease(MutexMenuHandle);
+          }
+        }
+      }
+
+      monitor_last_tick = osKernelGetTickCount();
+    }
+
+    ramdufanlearn = uxTaskGetStackHighWaterMark(NULL);
+    osDelay(100U);
+  }
+  /* USER CODE END StartTaskFanLearn */
 }
 
 /**

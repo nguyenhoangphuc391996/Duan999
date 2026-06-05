@@ -34,7 +34,7 @@ extern "C" {
 #define APP_SETTINGS_FLASH_ADDR   0x0800F800UL
 
 #define APP_SETTINGS_MAGIC        0xCA5E1A2BUL  /**< Giá trị nhận dạng hợp lệ */
-#define APP_SETTINGS_VERSION      8U            /**< v8: toc_do_quat mặc định 100%, migrate từ v7 */
+#define APP_SETTINGS_VERSION      9U            /**< v9: lưu fan_learned_tach, migrate từ v8 */
 
 /* =========================================================================
  * API
