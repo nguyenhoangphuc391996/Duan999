@@ -31,6 +31,7 @@
 #include "app_settings.h"
 #include "output.h"
 #include "output_control.h"
+#include "fan.h"
 #include <string.h>
 
 #undef Error_Handler
@@ -150,7 +151,8 @@ static rtrecd_t g_rtrecd = {
 
 /* Menu context - shared between TaskUI (writer) and TaskLCD (reader/renderer) */
 static app_menu_ctx_t g_menu_ctx;
-static output_t g_output;
+static output_t       g_output;
+static fan_ctx_t      g_fan_ctx;
 
 /* Bộ đếm xung TACH (PB4 / TIM3_CH1): tăng trong HAL_TIM_IC_CaptureCallback */
 static volatile uint32_t g_tach_pulse_count = 0U;
@@ -183,173 +185,21 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/** @brief Cập nhật PB5 theo mọi nguồn lỗi (quạt + cảm biến). */
+/**
+ * @brief Cập nhật GPIO báo động PB5 theo mọi nguồn lỗi.
+ *        Gọi từ StartTaskFanLearn mỗi vòng lặp.
+ */
 static void alarm_update(void)
 {
-  bool on = false;
+  bool scd41_fault    = false;
+  uint8_t ds18b20_mask = 0U;
 
   osMutexAcquire(MutexMenuHandle, osWaitForever);
-  if (g_menu_ctx.fan_alarm_active != 0U) { on = true; }
-  if (g_menu_ctx.fan_stuck_fault != 0U) { on = true; }
-  if (g_menu_ctx.scd41_fault) { on = true; }
-  if (g_menu_ctx.ds18b20_fault_mask != 0U) { on = true; }
+  scd41_fault   = g_menu_ctx.scd41_fault;
+  ds18b20_mask  = g_menu_ctx.ds18b20_fault_mask;
   osMutexRelease(MutexMenuHandle);
 
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
-}
-
-/** @brief Đánh dấu WORK1 dirty (caller đã giữ MutexMenuHandle). */
-static inline void fan_fault_mark_work1_dirty_locked(app_menu_ctx_t *ctx)
-{
-  if (ctx->screen == SCREEN_WORK1)
-  {
-    ctx->dirty = true;
-  }
-}
-
-/** @brief Đánh dấu WORK1 dirty (tự khóa mutex). */
-static void fan_fault_mark_work1_dirty(void)
-{
-  osMutexAcquire(MutexMenuHandle, osWaitForever);
-  fan_fault_mark_work1_dirty_locked(&g_menu_ctx);
-  osMutexRelease(MutexMenuHandle);
-}
-
-/**
- * @brief An toàn quạt: có PWM nhưng không có xung TACH trong 5 giây → kẹt.
- *        Tắt quạt ngay và báo lỗi ngay (không chờ 1 phút).
- */
-static void fan_stuck_monitor(uint32_t now_tick)
-{
-  static uint32_t s_last_check_tick = 0U;
-  static uint32_t s_tach_last       = 0U;
-  static uint8_t  s_last_duty       = 0xFFU;
-  static uint8_t  s_no_pulse_sec    = 0U;
-  static uint32_t s_grace_until     = 0U;
-  static bool     s_tach_inited     = false;
-
-  if (!s_tach_inited)
-  {
-    s_tach_last   = g_tach_pulse_count;
-    s_tach_inited = true;
-  }
-
-  if ((now_tick - s_last_check_tick) < 1000U)
-  {
-    return;
-  }
-  s_last_check_tick = now_tick;
-
-  uint8_t duty         = 0U;
-  uint8_t learn_active = 0U;
-  app_mode_t mode      = MODE_NGHI;
-
-  osMutexAcquire(MutexMenuHandle, osWaitForever);
-  learn_active = g_menu_ctx.fan_learn_active;
-  mode         = g_menu_ctx.active_mode;
-  if (learn_active != 0U)
-  {
-    duty = g_menu_ctx.fan_learn_pwm_pct;
-  }
-  else if (mode <= MODE_QUA_THE)
-  {
-    duty = g_menu_ctx.mode_cfg[mode].toc_do_quat;
-  }
-  osMutexRelease(MutexMenuHandle);
-
-  /* Không giám sát kẹt khi không ra lệnh quay hoặc đang học tốc độ */
-  if ((learn_active != 0U) || (mode == MODE_NGHI) || (mode == MODE_THANH_TRUNG))
-  {
-    s_no_pulse_sec = 0U;
-    s_last_duty    = duty;
-    if (duty == 0U)
-    {
-      osMutexAcquire(MutexMenuHandle, osWaitForever);
-      if (g_menu_ctx.fan_stuck_fault != 0U)
-      {
-        g_menu_ctx.fan_stuck_fault = 0U;
-        g_menu_ctx.fan_force_off   = 0U;
-        fan_fault_mark_work1_dirty_locked(&g_menu_ctx);
-      }
-      osMutexRelease(MutexMenuHandle);
-    }
-    return;
-  }
-
-  if (duty != s_last_duty)
-  {
-    s_last_duty    = duty;
-    s_no_pulse_sec = 0U;
-    s_grace_until  = now_tick + 3000U; /* 3 s cho quạt khởi động sau đổi PWM */
-
-    if (duty == 0U)
-    {
-      osMutexAcquire(MutexMenuHandle, osWaitForever);
-      g_menu_ctx.fan_stuck_fault = 0U;
-      g_menu_ctx.fan_force_off   = 0U;
-      fan_fault_mark_work1_dirty_locked(&g_menu_ctx);
-      osMutexRelease(MutexMenuHandle);
-      return;
-    }
-  }
-
-  if (duty == 0U)
-  {
-    return;
-  }
-
-  if (now_tick < s_grace_until)
-  {
-    return;
-  }
-
-  {
-    uint32_t tach_now = g_tach_pulse_count;
-    uint32_t pulses   = tach_now - s_tach_last;
-    s_tach_last       = tach_now;
-
-    if (pulses > 0U)
-    {
-      if (s_no_pulse_sec > 0U)
-      {
-        osMutexAcquire(MutexMenuHandle, osWaitForever);
-        if ((g_menu_ctx.fan_stuck_fault != 0U) || (g_menu_ctx.fan_force_off != 0U))
-        {
-          g_menu_ctx.fan_stuck_fault = 0U;
-          g_menu_ctx.fan_force_off   = 0U;
-          fan_fault_mark_work1_dirty_locked(&g_menu_ctx);
-        }
-        osMutexRelease(MutexMenuHandle);
-      }
-      s_no_pulse_sec = 0U;
-      return;
-    }
-
-    if (s_no_pulse_sec < 255U)
-    {
-      s_no_pulse_sec++;
-    }
-
-    if (s_no_pulse_sec >= 5U)
-    {
-      bool newly_stuck = false;
-
-      osMutexAcquire(MutexMenuHandle, osWaitForever);
-      if (g_menu_ctx.fan_stuck_fault == 0U)
-      {
-        g_menu_ctx.fan_stuck_fault = 1U;
-        g_menu_ctx.fan_force_off   = 1U;
-        fan_fault_mark_work1_dirty_locked(&g_menu_ctx);
-        newly_stuck = true;
-      }
-      osMutexRelease(MutexMenuHandle);
-
-      if (newly_stuck)
-      {
-        output_fan_set_percent(&g_output, 0U);
-      }
-    }
-  }
+  fan_alarm_update(&g_fan_ctx, scd41_fault, ds18b20_mask);
 }
 
 /* USER CODE END 0 */
@@ -362,10 +212,11 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	itm_set_library_enabled(ITM_LIB_RTRECD, true);
+	itm_set_library_enabled(ITM_LIB_RTRECD,  true);
 	itm_set_library_enabled(ITM_LIB_DS18B20, true);
-	itm_set_library_enabled(ITM_LIB_GLOBAL, true);
-	itm_set_library_enabled(ITM_LIB_SCD41, true);
+	itm_set_library_enabled(ITM_LIB_GLOBAL,  true);
+	itm_set_library_enabled(ITM_LIB_SCD41,   true);
+	itm_set_library_enabled(ITM_LIB_FAN,     true);
 
 
   /* USER CODE END 1 */
@@ -1307,9 +1158,10 @@ void StartTaskOutput(void *argument)
 /* USER CODE BEGIN Header_StartTaskFanLearn */
 /**
 * @brief Function implementing the TaskFanLearn thread.
-*        - Học tốc độ quạt: tăng PWM từ 0→100%, đo xung TACH tại mỗi bước 10%.
-*        - Giám sát tốc độ: lệch >25% liên tục 1 phút → QER + còi PB5.
-*        - An toàn kẹt: có PWM nhưng không quay 5 s → tắt quạt ngay + QER + còi.
+*        - Học tốc độ quạt: tắt quạt, chờ dừng hẳn, rồi tăng PWM 0→100%.
+*        - Giám sát RPM đã học: lệch >±25% (2 lần ×5 s) → tắt quạt + QER + còi.
+*        - Phục hồi lệch học: chờ quạt dừng hẳn (hết quán tính), quay tay >= 100 RPM mới bật lại;
+*          trong ±15% mới tắt còi.
 *        - Còi PB5 cũng kêu khi lỗi SCD41 hoặc DS18B20.
 * @param argument: Not used
 * @retval None
@@ -1319,188 +1171,23 @@ void StartTaskFanLearn(void *argument)
 {
   /* USER CODE BEGIN StartTaskFanLearn */
 
-  /* Khởi động TIM3 Input Capture interrupt để đếm xung TACH trên PB4 */
+  /* Khởi động TIM3 Input Capture để đếm xung TACH trên PB4 */
   HAL_NVIC_SetPriority(TIM3_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(TIM3_IRQn);
   HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_1);
 
-  static uint8_t  s_fan_error_count  = 0U;   /* số chu kỳ 5 s liên tiếp có lỗi */
-  uint32_t monitor_last_tick = osKernelGetTickCount();
+  /* Khởi tạo fan context: PB5 = GPIO báo động */
+  fan_ctx_init(&g_fan_ctx,
+               &g_menu_ctx,
+               &g_output,
+               &g_tach_pulse_count,
+               MutexMenuHandle,
+               GPIOB,
+               GPIO_PIN_5);
 
   for (;;)
   {
-    /* ================================================================
-     * KHỐI HỌC TỐC ĐỘ QUẠT
-     * ============================================================= */
-    if (g_menu_ctx.fan_learn_req)
-    {
-      g_menu_ctx.fan_learn_req    = 0U;
-      g_menu_ctx.fan_learn_active = 1U;
-      g_menu_ctx.fan_learn_done   = 0U;
-      s_fan_error_count           = 0U;
-
-      osMutexAcquire(MutexMenuHandle, osWaitForever);
-      g_menu_ctx.fan_alarm_active  = 0U;
-      g_menu_ctx.fan_stuck_fault   = 0U;
-      g_menu_ctx.fan_force_off     = 0U;
-      fan_fault_mark_work1_dirty_locked(&g_menu_ctx);
-      osMutexRelease(MutexMenuHandle);
-
-      uint8_t step;
-      for (step = 0U; step < FAN_LEARN_STEPS; step++)
-      {
-        /* Kiểm tra nếu user đã hủy qua nút dài */
-        if (!g_menu_ctx.fan_learn_active)
-        {
-          break;
-        }
-
-        uint8_t duty = (uint8_t)(step * 10U);
-
-        osMutexAcquire(MutexMenuHandle, osWaitForever);
-        g_menu_ctx.fan_learn_step    = step;
-        g_menu_ctx.fan_learn_pwm_pct = duty;
-        osMutexRelease(MutexMenuHandle);
-
-        /* Thời gian ổn định:
-         *  - Step 0 (0%): 500 ms – quạt dừng
-         *  - Step 1-2 (10-20%): 4 s – vùng khởi động, quạt cần thêm thời gian
-         *  - Step 3-4 (30-40%): 3 s
-         *  - Step 5+ (50-100%): 2 s
-         */
-        if (step == 0U)
-        {
-          osDelay(500U);
-        }
-        else if (duty <= 20U)
-        {
-          osDelay(4000U);
-        }
-        else if (duty <= 40U)
-        {
-          osDelay(3000U);
-        }
-        else
-        {
-          osDelay(2000U);
-        }
-
-        if (!g_menu_ctx.fan_learn_active) { break; }
-
-        /* Đếm xung TACH trong 1000 ms */
-        uint32_t cnt_start = g_tach_pulse_count;
-        osDelay(1000U);
-        uint32_t cnt_end   = g_tach_pulse_count;
-        uint32_t pulses    = cnt_end - cnt_start;
-
-        osMutexAcquire(MutexMenuHandle, osWaitForever);
-        g_menu_ctx.fan_learned_tach[step] =
-            (pulses > 0xFFFFU) ? (uint16_t)0xFFFFU : (uint16_t)pulses;
-        osMutexRelease(MutexMenuHandle);
-      }
-
-      /* Kết thúc học (hoàn thành hoặc bị hủy) */
-      osMutexAcquire(MutexMenuHandle, osWaitForever);
-      g_menu_ctx.fan_learn_active  = 0U;
-      g_menu_ctx.fan_learn_pwm_pct = 0U;
-
-      if (step == FAN_LEARN_STEPS)
-      {
-        /* Học thành công toàn bộ 11 bước */
-        g_menu_ctx.fan_learn_done  = 1U;
-        g_menu_ctx.fan_learn_phase = FAN_LEARN_DONE;
-        /* Lưu ngay vào Flash – không cần chờ user nhấn dài */
-        app_settings_save(&g_menu_ctx);
-      }
-      else
-      {
-        /* Bị hủy giữa chừng */
-        g_menu_ctx.fan_learn_phase = FAN_LEARN_IDLE;
-      }
-      osMutexRelease(MutexMenuHandle);
-
-      /* Reset bộ đếm lỗi để bắt đầu giám sát sạch */
-      s_fan_error_count = 0U;
-      monitor_last_tick = osKernelGetTickCount();
-    }
-
-    /* ================================================================
-     * KHỐI GIÁM SÁT TỐC ĐỘ QUẠT (5 s/lần)
-     * ============================================================= */
-    if ((osKernelGetTickCount() - monitor_last_tick) >= 5000U)
-    {
-      osMutexAcquire(MutexMenuHandle, osWaitForever);
-      uint8_t fan_done   = g_menu_ctx.fan_learn_done;
-      uint8_t fan_active = g_menu_ctx.fan_learn_active;
-
-      /* Duty % hiện tại theo chế độ đang chạy */
-      uint8_t current_duty = 0U;
-      if ((g_menu_ctx.active_mode <= MODE_QUA_THE) && !fan_active)
-      {
-        current_duty = g_menu_ctx.mode_cfg[g_menu_ctx.active_mode].toc_do_quat;
-      }
-
-      uint16_t learned_arr[FAN_LEARN_STEPS];
-      memcpy(learned_arr, g_menu_ctx.fan_learned_tach, sizeof(learned_arr));
-      osMutexRelease(MutexMenuHandle);
-
-      if (fan_done && !fan_active && (current_duty > 0U))
-      {
-        /* Xác định bước học gần nhất (làm tròn đến 10%) */
-        uint8_t step = (uint8_t)((current_duty + 5U) / 10U);
-        if (step >= FAN_LEARN_STEPS) { step = FAN_LEARN_STEPS - 1U; }
-
-        uint16_t learned = learned_arr[step];
-
-        if (learned > 0U)
-        {
-          /* Đếm xung TACH trong 1000 ms */
-          uint32_t cnt_start = g_tach_pulse_count;
-          osDelay(1000U);
-          uint32_t cnt_end   = g_tach_pulse_count;
-          uint32_t pulses    = cnt_end - cnt_start;
-
-          /* Sai lệch tuyệt đối */
-          int32_t diff = (int32_t)pulses - (int32_t)learned;
-          if (diff < 0) { diff = -diff; }
-
-          /* Ngưỡng chấp nhận: ±25% so với tốc độ đã học */
-          uint32_t tolerance = ((uint32_t)learned * 25U) / 100U;
-
-          if ((uint32_t)diff > tolerance)
-          {
-            if (s_fan_error_count < 255U) { s_fan_error_count++; }
-
-            /* 12 × 5 s = 60 s liên tục lỗi → báo lỗi tốc độ quạt */
-            if (s_fan_error_count >= 12U)
-            {
-              osMutexAcquire(MutexMenuHandle, osWaitForever);
-              if (g_menu_ctx.fan_alarm_active == 0U)
-              {
-                g_menu_ctx.fan_alarm_active = 1U;
-                fan_fault_mark_work1_dirty_locked(&g_menu_ctx);
-              }
-              osMutexRelease(MutexMenuHandle);
-            }
-          }
-          else
-          {
-            s_fan_error_count = 0U;
-            osMutexAcquire(MutexMenuHandle, osWaitForever);
-            if (g_menu_ctx.fan_alarm_active != 0U)
-            {
-              g_menu_ctx.fan_alarm_active = 0U;
-              fan_fault_mark_work1_dirty_locked(&g_menu_ctx);
-            }
-            osMutexRelease(MutexMenuHandle);
-          }
-        }
-      }
-
-      monitor_last_tick = osKernelGetTickCount();
-    }
-
-    fan_stuck_monitor(osKernelGetTickCount());
+    fan_task_body(&g_fan_ctx);
     alarm_update();
 
     ramdufanlearn = uxTaskGetStackHighWaterMark(NULL);

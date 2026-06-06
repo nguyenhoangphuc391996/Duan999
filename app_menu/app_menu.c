@@ -400,7 +400,8 @@ static void render_work1(app_menu_ctx_t *ctx)
 
     {
         char qfan[4];
-        if ((ctx->fan_alarm_active != 0U) || (ctx->fan_stuck_fault != 0U))
+        if ((ctx->fan.alarm_active != 0U) ||
+            (ctx->fan.low_speed_fault != 0U))
         {
             snprintf(qfan, sizeof(qfan), "QER");
         }
@@ -598,14 +599,21 @@ static void render_fan_learn_run(app_menu_ctx_t *ctx)
 
     s_scroll_tick++;
 
-    switch (ctx->fan_learn_phase)
+    switch (ctx->fan.learn_phase)
     {
+    case FAN_LEARN_WAIT_STOP:
+        lcd_put_cur(0, 0);
+        lcd_send_line("Cho quat dung..");
+        lcd_put_cur(1, 0);
+        lcd_send_line("Ngan=huy");
+        break;
+
     case FAN_LEARN_RUNNING:
         lcd_put_cur(0, 0);
         lcd_send_line("Dang hoc quat..");
         snprintf(tmp, sizeof(tmp), "Buoc %u/10 (%u%%)",
-                 (unsigned)ctx->fan_learn_step,
-                 (unsigned)((uint8_t)(ctx->fan_learn_step * 10U)));
+                 (unsigned)ctx->fan.learn_step,
+                 (unsigned)((uint8_t)(ctx->fan.learn_step * 10U)));
         lcd_put_cur(1, 0);
         lcd_send_line(tmp);
         break;
@@ -1589,9 +1597,11 @@ static void handle_fan_learn_menu(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
         switch (ctx->cursor)
         {
         case 0U: /* Hoc */
-            ctx->fan_learn_req   = 1U;
-            ctx->fan_learn_phase = FAN_LEARN_RUNNING;
-            ctx->fan_learn_step  = 0U;
+            ctx->fan.learn_req       = 1U;
+            ctx->fan.learn_active    = 1U;
+            ctx->fan.learn_pwm_pct   = 0U;
+            ctx->fan.learn_phase     = FAN_LEARN_WAIT_STOP;
+            ctx->fan.learn_step      = 0U;
             nav_push(ctx, SCREEN_FAN_LEARN_RUN);
             break;
         case 1U: /* Thoat */
@@ -1614,18 +1624,18 @@ static void handle_fan_learn_run(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
     switch (ev)
     {
     case RTRECD_EVENT_BUTTON_SHORT:
-        if (ctx->fan_learn_phase == FAN_LEARN_DONE ||
-            ctx->fan_learn_phase == FAN_LEARN_ERROR)
+        if (ctx->fan.learn_phase == FAN_LEARN_DONE ||
+            ctx->fan.learn_phase == FAN_LEARN_ERROR)
         {
-            ctx->fan_learn_phase = FAN_LEARN_IDLE;
+            ctx->fan.learn_phase = FAN_LEARN_IDLE;
             nav_pop(ctx);
         }
         break;
     case RTRECD_EVENT_BUTTON_LONG:
         /* Thoát khẩn cấp: hủy học, trả quyền điều khiển quạt về output_ctrl */
-        ctx->fan_learn_req    = 0U;
-        ctx->fan_learn_phase  = FAN_LEARN_IDLE;
-        ctx->fan_learn_active = 0U;
+        ctx->fan.learn_req    = 0U;
+        ctx->fan.learn_phase  = FAN_LEARN_IDLE;
+        ctx->fan.learn_active = 0U;
         nav_pop(ctx);
         break;
     default:

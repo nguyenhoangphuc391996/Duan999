@@ -22,6 +22,7 @@ typedef enum {
     ITM_LIB_RTRECD,
     ITM_LIB_LCD,
     ITM_LIB_MENU,
+    ITM_LIB_FAN,
     ITM_LIB_MAX
 } itm_lib_t;
 

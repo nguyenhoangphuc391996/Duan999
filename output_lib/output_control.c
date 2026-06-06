@@ -131,9 +131,9 @@ void output_ctrl_snapshot_take(output_ctrl_snapshot_t *s,
 		s->sg90_mo_nho_deg = cfg->sg90_mo_nho_deg;
 	}
 
-	s->fan_learn_active  = (menu->fan_learn_active != 0U);
-	s->fan_learn_pwm_pct = menu->fan_learn_pwm_pct;
-	s->fan_force_off     = (menu->fan_force_off != 0U);
+	s->fan_learn_active  = (menu->fan.learn_active != 0U);
+	s->fan_learn_pwm_pct = menu->fan.learn_pwm_pct;
+	s->fan_force_off     = (menu->fan.force_off != 0U);
 	s->now_h = menu->time_cfg.hour;
 	s->now_m = menu->time_cfg.minute;
 	osMutexRelease(menu_mutex);
