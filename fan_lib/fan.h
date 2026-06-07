@@ -5,7 +5,7 @@
  *   - Học tốc độ RPM (bảng 0%→100%, bước 10%)
  *   - Giám sát RPM so với profile đã học (±25%, 2 lần xác nhận)
  *   - Giám sát an toàn cơ học (<100 RPM liên tục 2 s)
- *   - Phục hồi lỗi: chờ hết quán tính → quay tay → cho chạy lại
+ *   - Phục hồi lỗi: chờ RPM về mức học ở 0% → quay tay → cho chạy lại
  *   - Debug qua ITM Console (ITM_LIB_FAN)
  *
  * Phụ thuộc:
@@ -59,18 +59,25 @@ extern "C" {
 #define FAN_LEARN_TOLERANCE_PERCENT   25U
 /** Sàn sai số tuyệt đối (RPM) – tránh báo nhầm do lượng tử hoá TACH. */
 #define FAN_LEARN_TOLERANCE_RPM_MIN   60U
-/** Chờ PWM/chế độ ổn định (ms) trước khi bắt đầu giám sát profile. */
-#define FAN_LEARN_MONITOR_WARMUP_MS   15000U
-/** Số mẫu 1-giây để tính trung bình RPM mỗi chu kỳ giám sát. */
-#define FAN_LEARN_RPM_AVG_SAMPLES     3U
-/** Số lần liên tiếp lệch ngưỡng trước khi kích hoạt lỗi (×5 s/lần). */
-#define FAN_LEARN_FAULT_CONFIRM_COUNT 2U
+/** Chu kỳ lặp giám sát profile khi duty/chế độ đã ổn định (ms). */
+#define FAN_MONITOR_INTERVAL_MS       3000U
+/** Số lần liên tiếp lệch ngưỡng trước khi kích hoạt lỗi. */
+#define FAN_LEARN_FAULT_CONFIRM_COUNT 5U
 /** Xung TACH tối đa/giây để coi quạt đã dừng hẳn (1 xung ≈ nhiễu). */
 #define FAN_COAST_STOP_MAX_PPS        1U
 /** Số giây liên tục "dừng" để xác nhận hết quán tính. */
 #define FAN_COAST_STOP_CONFIRM_SEC    2U
 /** Hết thời gian chờ dừng thì bắt đầu học dù chưa xác nhận (ms). */
 #define FAN_COAST_STOP_TIMEOUT_MS     30000U
+
+/** Chờ PWM ổn định (giây) – học: một lần trước các lần đo; giám sát: sau đổi duty/chế độ. */
+#define FAN_LEARN_STEP_SETTLE_SEC     5U
+/** Số giây đo RPM mỗi lần (trung bình 1 mẫu/giây) – dùng chung học và giám sát. */
+#define FAN_LEARN_STEP_MEASURE_SEC    3U
+/** Số lần đo liên tiếp khi học (sau settle) → trung bình các lần đo. */
+#define FAN_LEARN_STEP_REPEAT_COUNT   5U
+/** Chờ thêm (giây) sau khi xong một bước học rồi mới đổi sang % PWM tiếp theo. */
+#define FAN_LEARN_STEP_GAP_SEC        2U
 
 /* =========================================================================
  * Fan state – nhúng vào app_menu_ctx_t, truy cập qua mutex

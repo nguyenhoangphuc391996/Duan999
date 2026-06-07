@@ -20,6 +20,53 @@ static int32_t round_div_i32(int32_t a, int32_t b)
 	return (a - (b / 2)) / b;
 }
 
+static bool output_ctrl_system_fault(const output_ctrl_snapshot_t *s)
+{
+	return (s->scd41_fault
+	        || (s->ds18b20_fault_mask != 0U)
+	        || (s->fan_alarm_active != 0U)
+	        || (s->fan_low_speed_fault != 0U));
+}
+
+/** Warmup 5 phút không áp dụng cho Nghỉ và Thanh trùng. */
+static bool output_ctrl_warmup_applies(app_mode_t mode)
+{
+	return ((mode != MODE_NGHI) && (mode != MODE_THANH_TRUNG));
+}
+
+static void output_ctrl_enter_normal(output_ctrl_state_t *st,
+                                     app_mode_t mode,
+                                     uint32_t now_tick)
+{
+	st->phase = OUTPUT_PHASE_NORMAL;
+	if (mode == MODE_THANH_TRUNG)
+	{
+		st->thanh_trung_start_tick = now_tick;
+	}
+}
+
+/** Chỉ chạy quạt (theo % cài đặt, 0% = tắt); tắt sưởi, đèn, ẩm, SG90 về 0°. */
+static void output_ctrl_warmup_only(output_t *h, const output_ctrl_snapshot_t *s)
+{
+	uint8_t fan_pct;
+
+	output_heater_set(h, false);
+	output_mist_set(h, false);
+	output_lamp_set(h, false);
+	output_servo1_set_angle(h, 0U);
+	output_servo2_set_angle(h, 0U);
+
+	if (s->fan_learn_active)
+	{
+		fan_pct = s->fan_learn_pwm_pct;
+	}
+	else
+	{
+		fan_pct = s->fan_percent;
+	}
+	output_fan_set_percent(h, fan_pct);
+}
+
 static bool is_time_in_window(uint8_t now_h, uint8_t now_m,
                               uint8_t start_h, uint8_t start_m,
                               uint8_t stop_h, uint8_t stop_m)
@@ -46,7 +93,10 @@ void output_ctrl_state_init(output_ctrl_state_t *st)
 		return;
 	}
 	st->thanh_trung_start_tick = 0U;
-	st->last_mode = MODE_COUNT;
+	st->warmup_start_tick      = 0U;
+	st->last_mode              = MODE_COUNT;
+	st->phase                  = OUTPUT_PHASE_WARMUP;
+	st->had_fault              = false;
 }
 
 void output_ctrl_snapshot_take(output_ctrl_snapshot_t *s,
@@ -131,9 +181,13 @@ void output_ctrl_snapshot_take(output_ctrl_snapshot_t *s,
 		s->sg90_mo_nho_deg = cfg->sg90_mo_nho_deg;
 	}
 
-	s->fan_learn_active  = (menu->fan.learn_active != 0U);
-	s->fan_learn_pwm_pct = menu->fan.learn_pwm_pct;
-	s->fan_force_off     = (menu->fan.force_off != 0U);
+	s->scd41_fault          = menu->scd41_fault;
+	s->ds18b20_fault_mask   = menu->ds18b20_fault_mask;
+	s->fan_alarm_active     = menu->fan.alarm_active;
+	s->fan_low_speed_fault  = menu->fan.low_speed_fault;
+	s->fan_learn_active     = (menu->fan.learn_active != 0U);
+	s->fan_learn_pwm_pct    = menu->fan.learn_pwm_pct;
+	s->fan_force_off        = (menu->fan.force_off != 0U);
 	s->now_h = menu->time_cfg.hour;
 	s->now_m = menu->time_cfg.minute;
 	osMutexRelease(menu_mutex);
@@ -149,18 +203,69 @@ bool output_ctrl_apply(output_t *h,
 		return false;
 	}
 
-	if (!s->auto_mode_valid)
+	/* ---- Lỗi sensor / quạt: tắt toàn bộ đầu ra ---- */
+	if (output_ctrl_system_fault(s))
 	{
-		return false;
+		st->phase     = OUTPUT_PHASE_FAULT;
+		st->had_fault = true;
+		output_all_off(h);
+		return true;
+	}
+
+	if (st->had_fault)
+	{
+		st->had_fault = false;
+		if (output_ctrl_warmup_applies(s->mode))
+		{
+			st->phase             = OUTPUT_PHASE_WARMUP;
+			st->warmup_start_tick = now_tick;
+		}
+		else
+		{
+			output_ctrl_enter_normal(st, s->mode, now_tick);
+		}
 	}
 
 	if (s->mode != st->last_mode)
 	{
 		st->last_mode = s->mode;
-		if (s->mode == MODE_THANH_TRUNG)
+		if (output_ctrl_warmup_applies(s->mode))
 		{
-			st->thanh_trung_start_tick = now_tick;
+			st->phase             = OUTPUT_PHASE_WARMUP;
+			st->warmup_start_tick = now_tick;
 		}
+		else
+		{
+			output_ctrl_enter_normal(st, s->mode, now_tick);
+		}
+	}
+
+	if (st->warmup_start_tick == 0U)
+	{
+		st->warmup_start_tick = now_tick;
+	}
+
+	if (st->phase == OUTPUT_PHASE_WARMUP)
+	{
+		if (!output_ctrl_warmup_applies(s->mode))
+		{
+			output_ctrl_enter_normal(st, s->mode, now_tick);
+		}
+		else if ((now_tick - st->warmup_start_tick) < OUTPUT_WARMUP_MS)
+		{
+			output_ctrl_warmup_only(h, s);
+			return true;
+		}
+		else
+		{
+			output_ctrl_enter_normal(st, s->mode, now_tick);
+		}
+	}
+
+	if (!s->auto_mode_valid)
+	{
+		output_all_off(h);
+		return true;
 	}
 
 	if (s->mode == MODE_THANH_TRUNG)

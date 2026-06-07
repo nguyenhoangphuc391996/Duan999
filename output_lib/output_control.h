@@ -17,11 +17,26 @@ extern "C" {
 #include "app_menu.h"
 #include "output.h"
 
+/** Thời gian chỉ chạy quạt trước khi điều khiển đầu ra (khởi động / đổi chế độ / hết lỗi). */
+#define OUTPUT_WARMUP_MS                (1U * 60U * 1000U)
+
+/** @brief Giai đoạn điều khiển đầu ra. */
+typedef enum
+{
+	OUTPUT_PHASE_FAULT = 0,
+	OUTPUT_PHASE_WARMUP,
+	OUTPUT_PHASE_NORMAL,
+} output_ctrl_phase_t;
+
 /** @brief Snapshot dữ liệu điều khiển (đọc từ menu context). */
 typedef struct
 {
 	bool auto_mode_valid;
 	app_mode_t mode;
+	bool scd41_fault;
+	uint8_t ds18b20_fault_mask;
+	uint8_t fan_alarm_active;
+	uint8_t fan_low_speed_fault;
 	bool valid_temp;
 	int16_t temp_c;
 	bool valid_humi;
@@ -51,11 +66,14 @@ typedef struct
 	uint8_t sg90_mo_nho_deg;
 } output_ctrl_snapshot_t;
 
-/** @brief Trạng thái nội bộ vòng điều khiển (thanh trùng, chế độ trước). */
+/** @brief Trạng thái nội bộ vòng điều khiển (thanh trùng, warmup, lỗi). */
 typedef struct
 {
 	uint32_t thanh_trung_start_tick;
+	uint32_t warmup_start_tick;
 	app_mode_t last_mode;
+	output_ctrl_phase_t phase;
+	bool had_fault;
 } output_ctrl_state_t;
 
 void output_ctrl_state_init(output_ctrl_state_t *st);
@@ -69,7 +87,7 @@ void output_ctrl_snapshot_take(output_ctrl_snapshot_t *s,
 
 /**
  * @brief Áp dụng điều khiển tự động lên @p h theo snapshot.
- * @return false nếu chế độ Nghỉ (caller nên gọi output_all_off).
+ * @return false nếu tham số NULL.
  */
 bool output_ctrl_apply(output_t *h,
                        output_ctrl_state_t *st,

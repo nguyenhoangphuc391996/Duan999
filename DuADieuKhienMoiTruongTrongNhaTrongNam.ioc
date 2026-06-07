@@ -2,11 +2,11 @@
 CAD.formats=
 CAD.pinconfig=
 CAD.provider=
-FREERTOS.FootprintOK=false
+FREERTOS.FootprintOK=true
 FREERTOS.IPParameters=Tasks01,FootprintOK,Queues01,Mutexes01,configTOTAL_HEAP_SIZE
 FREERTOS.Mutexes01=MutexI2C2,Dynamic,NULL,Available;MutexSCD41,Dynamic,NULL,Available;MutexMenu,Dynamic,NULL,Available
 FREERTOS.Queues01=QueueEC11,16,rtrecd_queue_item_t,0,Dynamic,NULL,NULL;QueueSCD41,16,scd41_queue_item_t,0,Dynamic,NULL,NULL;QueueDS18B20,16,Ds18b20QueueItem,0,Dynamic,NULL,NULL;QueueOutput,16,uint16_t,0,Dynamic,NULL,NULL
-FREERTOS.Tasks01=TaskInput,24,500,StartTaskInput,Default,NULL,Dynamic,NULL,NULL;TaskUI,24,500,StartTaskUI,Default,NULL,Dynamic,NULL,NULL;TaskLCD,24,300,StartTaskLCD,Default,NULL,Dynamic,NULL,NULL;TaskDS18B20,23,500,StartTaskDS18B20,Default,NULL,Dynamic,NULL,NULL;TaskOutput,24,200,StartTaskOutput,Default,NULL,Dynamic,NULL,NULL;TaskFanLearn,16,300,StartTaskFanLearn,Default,NULL,Dynamic,NULL,NULL
+FREERTOS.Tasks01=TaskInput,24,500,StartTaskInput,Default,NULL,Dynamic,NULL,NULL;TaskUI,24,500,StartTaskUI,Default,NULL,Dynamic,NULL,NULL;TaskLCD,24,300,StartTaskLCD,Default,NULL,Dynamic,NULL,NULL;TaskDS18B20,24,500,StartTaskDS18B20,Default,NULL,Dynamic,NULL,NULL;TaskOutput,24,200,StartTaskOutput,Default,NULL,Dynamic,NULL,NULL;TaskFanLearn,24,300,StartTaskFanLearn,Default,NULL,Dynamic,NULL,NULL
 FREERTOS.configTOTAL_HEAP_SIZE=12000
 File.Version=6
 GPIO.groupedBy=Group By Peripherals

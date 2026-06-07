@@ -7,7 +7,7 @@
  *   3. Giám sát an toàn cơ học (<100 RPM liên tục 2 s → tắt ngay)
  *   4. Phục hồi lỗi:
  *      - Lỗi cơ học: RPM quay lên >= 100 RPM → mở lại
- *      - Lỗi lệch học: chờ dừng hẳn → quay tay >= 100 RPM → mở lại
+ *      - Lỗi lệch học: chờ RPM về mức học ở 0% → quay tay >= 100 RPM → mở lại
  *
  * ITM debug (enable bằng itm_set_library_enabled(ITM_LIB_FAN, true)):
  *   [FAN] ...  – mọi sự kiện quan trọng được in ra kênh ITM_LIB_FAN.
@@ -36,8 +36,9 @@ typedef enum
     FAN_LEARN_REC_WAIT_SPIN, /**< Đã dừng, chờ quay tay >= 100 RPM  */
 } fan_learn_rec_phase_t;
 
-static fan_learn_rec_phase_t s_learn_rec_phase = FAN_LEARN_REC_IDLE;
-static uint8_t               s_coast_stop_sec  = 0U;
+static fan_learn_rec_phase_t s_learn_rec_phase      = FAN_LEARN_REC_IDLE;
+static uint8_t               s_coast_stop_sec       = 0U;
+static uint32_t              s_learn_rec_coast_start = 0U;
 
 /* =========================================================================
  * Helper: API công khai
@@ -63,14 +64,16 @@ static void s_mark_work1_dirty(app_menu_ctx_t *menu)
 
 static void s_learn_rec_reset(void)
 {
-    s_learn_rec_phase = FAN_LEARN_REC_IDLE;
-    s_coast_stop_sec  = 0U;
+    s_learn_rec_phase       = FAN_LEARN_REC_IDLE;
+    s_coast_stop_sec        = 0U;
+    s_learn_rec_coast_start = 0U;
 }
 
 static void s_learn_rec_on_fault(void)
 {
-    s_learn_rec_phase = FAN_LEARN_REC_COASTING;
-    s_coast_stop_sec  = 0U;
+    s_learn_rec_phase       = FAN_LEARN_REC_COASTING;
+    s_coast_stop_sec        = 0U;
+    s_learn_rec_coast_start = osKernelGetTickCount();
 }
 
 /* =========================================================================
@@ -196,6 +199,57 @@ static uint16_t s_measure_rpm_avg(fan_ctx_t *fc, uint8_t samples)
     return (uint16_t)(sum / (uint32_t)samples);
 }
 
+/** Tick delta → ms (configTICK_RATE_HZ = 1000 trong project này). */
+static uint32_t s_tick_elapsed_ms(uint32_t t0)
+{
+    return osKernelGetTickCount() - t0;
+}
+
+/**
+ * @brief Đo RPM khi học: chờ settle_sec một lần, rồi đo measure_sec
+ *        lặp repeat_count lần → trung bình các lần đo.
+ */
+static uint16_t s_learn_measure_rpm(fan_ctx_t *fc, uint8_t step, uint8_t duty)
+{
+    uint8_t  rounds = FAN_LEARN_STEP_REPEAT_COUNT;
+    uint32_t sum    = 0U;
+    uint32_t t_phase;
+    uint32_t t_round;
+
+    if (rounds == 0U) { rounds = 1U; }
+
+    t_phase = osKernelGetTickCount();
+    FAN_LOG("Step %2u (%3u%%): [T] settle start (expect %u ms)\r\n",
+            (unsigned)step, (unsigned)duty,
+            (unsigned)((uint32_t)FAN_LEARN_STEP_SETTLE_SEC * 1000U));
+
+    osDelay((uint32_t)FAN_LEARN_STEP_SETTLE_SEC * 1000U);
+
+    FAN_LOG("Step %2u (%3u%%): [T] settle done +%lu ms\r\n",
+            (unsigned)step, (unsigned)duty,
+            (unsigned long)s_tick_elapsed_ms(t_phase));
+
+    for (uint8_t r = 0U; r < rounds; r++)
+    {
+        t_round = osKernelGetTickCount();
+        sum += (uint32_t)s_measure_rpm_avg(fc, FAN_LEARN_STEP_MEASURE_SEC);
+        FAN_LOG("Step %2u (%3u%%): [T] round %u/%u +%lu ms (step +%lu ms)\r\n",
+                (unsigned)step, (unsigned)duty,
+                (unsigned)(r + 1U), (unsigned)rounds,
+                (unsigned long)s_tick_elapsed_ms(t_round),
+                (unsigned long)s_tick_elapsed_ms(t_phase));
+    }
+
+    FAN_LOG("Step %2u (%3u%%): [T] measure phase total %lu ms (expect %lu ms)\r\n",
+            (unsigned)step, (unsigned)duty,
+            (unsigned long)s_tick_elapsed_ms(t_phase),
+            (unsigned long)(((uint32_t)FAN_LEARN_STEP_SETTLE_SEC
+                             + (uint32_t)rounds * (uint32_t)FAN_LEARN_STEP_MEASURE_SEC)
+                            * 1000U));
+
+    return (uint16_t)(sum / (uint32_t)rounds);
+}
+
 /* =========================================================================
  * Profile học
  * ========================================================================= */
@@ -242,6 +296,29 @@ static bool s_rpm_within_tolerance(uint16_t current_rpm, uint16_t learned_rpm_va
     return (diff <= tol);
 }
 
+/**
+ * @brief Coi quạt đã "tắt" sau khi cắt PWM 0%.
+ *        Ưu tiên so RPM đo được với RPM học ở 0% (quạt 0% vẫn quay nhẹ do quán tính).
+ *        Chưa có profile → fallback TACH gần 0.
+ */
+static bool s_coast_considered_stopped(fan_ctx_t *fc, uint32_t pps, uint16_t rpm)
+{
+    uint16_t learned_0 = 0U;
+    uint8_t  learn_done = 0U;
+
+    osMutexAcquire(fc->mutex, osWaitForever);
+    learned_0  = fc->menu_ctx->fan.learned_rpm[0];
+    learn_done = fc->menu_ctx->fan.learn_done;
+    osMutexRelease(fc->mutex);
+
+    if (learn_done != 0U)
+    {
+        return s_rpm_within_tolerance(rpm, learned_0, FAN_LEARN_TOLERANCE_PERCENT);
+    }
+
+    return s_tach_stopped(pps);
+}
+
 /* =========================================================================
  * Chờ quạt dừng hẳn (trước khi bắt đầu học)
  * ========================================================================= */
@@ -276,12 +353,13 @@ static bool s_wait_coast_stop(fan_ctx_t *fc)
         }
 
         uint32_t pps = s_measure_pulses_1s(fc);
-        FAN_LOG("Coast: %lu pps (stop when <=%u for %u s)\r\n",
-                (unsigned long)pps,
-                (unsigned)FAN_COAST_STOP_MAX_PPS,
+        uint16_t rpm = FAN_PULSES_TO_RPM(pps);
+
+        FAN_LOG("Coast: %lu pps (%u RPM), stop when near learned 0%% for %u s\r\n",
+                (unsigned long)pps, (unsigned)rpm,
                 (unsigned)FAN_COAST_STOP_CONFIRM_SEC);
 
-        if (s_tach_stopped(pps))
+        if (s_coast_considered_stopped(fc, pps, rpm))
         {
             stop_sec++;
         }
@@ -363,21 +441,42 @@ static void s_safety_monitor(fan_ctx_t *fc, uint32_t now_tick)
             switch (s_learn_rec_phase)
             {
             case FAN_LEARN_REC_COASTING:
-                if (s_tach_stopped(pulses))
+            {
+                uint16_t learned_0 = 0U;
+
+                osMutexAcquire(fc->mutex, osWaitForever);
+                learned_0 = fc->menu_ctx->fan.learned_rpm[0];
+                osMutexRelease(fc->mutex);
+
+                FAN_LOG("Recovery coast: rpm=%u (learned 0%%=%u, need %u s)\r\n",
+                        (unsigned)rpm, (unsigned)learned_0,
+                        (unsigned)FAN_COAST_STOP_CONFIRM_SEC);
+
+                if (s_coast_considered_stopped(fc, pulses, rpm))
                 {
                     if (s_coast_stop_sec < 255U) { s_coast_stop_sec++; }
                     if (s_coast_stop_sec >= FAN_COAST_STOP_CONFIRM_SEC)
                     {
                         s_learn_rec_phase = FAN_LEARN_REC_WAIT_SPIN;
                         s_coast_stop_sec  = 0U;
-                        FAN_LOG("Recovery: coasted to stop – please spin fan by hand\r\n");
+                        FAN_LOG("Recovery: coasted to 0%% level – please spin fan by hand\r\n");
                     }
                 }
                 else
                 {
                     s_coast_stop_sec = 0U;
                 }
+
+                if ((s_learn_rec_coast_start != 0U) &&
+                    ((now_tick - s_learn_rec_coast_start) >= FAN_COAST_STOP_TIMEOUT_MS))
+                {
+                    s_learn_rec_phase = FAN_LEARN_REC_WAIT_SPIN;
+                    s_coast_stop_sec  = 0U;
+                    FAN_LOG("Recovery: coast timeout (%u ms) – please spin fan by hand\r\n",
+                            (unsigned)FAN_COAST_STOP_TIMEOUT_MS);
+                }
                 break;
+            }
 
             case FAN_LEARN_REC_WAIT_SPIN:
                 FAN_LOG("Recovery spin: rpm=%u (need>=%u)\r\n",
@@ -498,7 +597,8 @@ static void s_run_learn_sequence(fan_ctx_t *fc)
     {
         if (fc->menu_ctx->fan.learn_active == 0U) { break; } /* user hủy */
 
-        uint8_t duty = (uint8_t)(step * 10U);
+        uint8_t  duty   = (uint8_t)(step * 10U);
+        uint32_t t_step = osKernelGetTickCount();
 
         osMutexAcquire(fc->mutex, osWaitForever);
         fc->menu_ctx->fan.learn_step    = step;
@@ -507,31 +607,48 @@ static void s_run_learn_sequence(fan_ctx_t *fc)
 
         /*
          * output_ctrl (TaskOutput, cứ 200 ms) sẽ đọc learn_pwm_pct và đặt PWM.
-         * Chờ ổn định trước khi đo RPM:
-         *   step 0 (0%):   500 ms – xác nhận quạt đứng yên
-         *   10-20%:       4000 ms – vùng khởi động khó đoán
-         *   30-40%:       3000 ms
-         *   50-100%:      2000 ms
+         * Mỗi bước: chờ settle_sec, đo measure_sec × repeat_count lần → trung bình.
          */
-        if (step == 0U)        { osDelay(500U);  }
-        else if (duty <= 20U)  { osDelay(4000U); }
-        else if (duty <= 40U)  { osDelay(3000U); }
-        else                   { osDelay(2000U); }
+        FAN_LOG("Step %2u (%3u%%): start tick=%lu expect %lu ms (settle %u + %u x %u s)\r\n",
+                (unsigned)step, (unsigned)duty,
+                (unsigned long)t_step,
+                (unsigned long)(((uint32_t)FAN_LEARN_STEP_SETTLE_SEC
+                                 + (uint32_t)FAN_LEARN_STEP_REPEAT_COUNT
+                                   * (uint32_t)FAN_LEARN_STEP_MEASURE_SEC)
+                                * 1000U),
+                (unsigned)FAN_LEARN_STEP_SETTLE_SEC,
+                (unsigned)FAN_LEARN_STEP_REPEAT_COUNT,
+                (unsigned)FAN_LEARN_STEP_MEASURE_SEC);
 
         if (fc->menu_ctx->fan.learn_active == 0U) { break; }
 
-        /* Đo RPM trong 1 s */
-        uint32_t cnt_start = *fc->tach_count;
-        osDelay(1000U);
-        uint32_t pulses = *fc->tach_count - cnt_start;
-        uint16_t rpm    = FAN_PULSES_TO_RPM(pulses);
+        uint16_t rpm = s_learn_measure_rpm(fc, step, duty);
+
+        if (fc->menu_ctx->fan.learn_active == 0U) { break; }
 
         osMutexAcquire(fc->mutex, osWaitForever);
         fc->menu_ctx->fan.learned_rpm[step] = rpm;
         osMutexRelease(fc->mutex);
 
-        FAN_LOG("Step %2u (%3u%%): %4u RPM\r\n",
-                (unsigned)step, (unsigned)duty, (unsigned)rpm);
+        FAN_LOG("Step %2u (%3u%%): %4u RPM [T] step done +%lu ms\r\n",
+                (unsigned)step, (unsigned)duty, (unsigned)rpm,
+                (unsigned long)s_tick_elapsed_ms(t_step));
+
+        if ((step + 1U) < FAN_LEARN_STEPS)
+        {
+            uint32_t t_gap;
+
+            if (fc->menu_ctx->fan.learn_active == 0U) { break; }
+            t_gap = osKernelGetTickCount();
+            FAN_LOG("Step %2u (%3u%%): [T] gap start (expect %u ms)\r\n",
+                    (unsigned)step, (unsigned)duty,
+                    (unsigned)((uint32_t)FAN_LEARN_STEP_GAP_SEC * 1000U));
+            osDelay((uint32_t)FAN_LEARN_STEP_GAP_SEC * 1000U);
+            FAN_LOG("Step %2u (%3u%%): [T] gap done +%lu ms (step+gap +%lu ms)\r\n",
+                    (unsigned)step, (unsigned)duty,
+                    (unsigned long)s_tick_elapsed_ms(t_gap),
+                    (unsigned long)s_tick_elapsed_ms(t_step));
+        }
     }
 
     /* ---- Kết thúc học ---- */
@@ -621,9 +738,11 @@ void fan_task_body(fan_ctx_t *fc)
     }
 
     /* ================================================================
-     * KHỐI GIÁM SÁT RPM ĐÃ HỌC (5 s / lần)
-     * ============================================================= */
-    if ((osKernelGetTickCount() - s_monitor_tick) >= 5000U)
+     * KHỐI GIÁM SÁT RPM ĐÃ HỌC (phản ứng nhanh – không lặp repeat)
+     *   – Sau đổi duty/chế độ: chờ settle_sec (một lần)
+     *   – Mỗi chu kỳ: đo measure_sec giây (một lần)
+     * ================================================================ */
+    if ((osKernelGetTickCount() - s_monitor_tick) >= FAN_MONITOR_INTERVAL_MS)
     {
         uint8_t    fan_done    = 0U;
         uint8_t    fan_active  = 0U;
@@ -656,18 +775,19 @@ void fan_task_body(fan_ctx_t *fc)
             }
 
             /* Chỉ giám sát khi: có profile hợp lệ + không bị force_off
-             *                   + duty > 0 + đã ổn định đủ thời gian  */
-            bool warmup_ok = ((osKernelGetTickCount() - s_mon_stable_tick) >=
-                              FAN_LEARN_MONITOR_WARMUP_MS);
+             *                   + duty > 0 + đã qua settle_sec sau đổi duty/chế độ */
+            bool settle_ok = ((osKernelGetTickCount() - s_mon_stable_tick) >=
+                              ((uint32_t)FAN_LEARN_STEP_SETTLE_SEC * 1000U));
 
             if ((fan_done != 0U) && (!force_off) && (cur_duty > 0U) &&
-                warmup_ok && s_profile_valid(learned, cur_duty))
+                settle_ok && s_profile_valid(learned, cur_duty))
             {
                 uint16_t exp_rpm = s_expected_rpm(learned, cur_duty);
 
                 if (exp_rpm > 0U)
                 {
-                    uint16_t meas_rpm = s_measure_rpm_avg(fc, FAN_LEARN_RPM_AVG_SAMPLES);
+                    uint16_t meas_rpm = s_measure_rpm_avg(fc,
+                                                          FAN_LEARN_STEP_MEASURE_SEC);
 
                     FAN_LOG("Monitor: duty=%u%% meas=%u RPM exp=%u RPM\r\n",
                             (unsigned)cur_duty, (unsigned)meas_rpm, (unsigned)exp_rpm);

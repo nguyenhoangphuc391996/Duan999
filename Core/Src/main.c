@@ -90,7 +90,7 @@ osThreadId_t TaskDS18B20Handle;
 const osThreadAttr_t TaskDS18B20_attributes = {
   .name = "TaskDS18B20",
   .stack_size = 500 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal7,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskOutput */
 osThreadId_t TaskOutputHandle;
@@ -104,7 +104,7 @@ osThreadId_t TaskFanLearnHandle;
 const osThreadAttr_t TaskFanLearn_attributes = {
   .name = "TaskFanLearn",
   .stack_size = 300 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for QueueEC11 */
 osMessageQueueId_t QueueEC11Handle;
@@ -212,10 +212,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	itm_set_library_enabled(ITM_LIB_RTRECD,  true);
-	itm_set_library_enabled(ITM_LIB_DS18B20, true);
+	itm_set_library_enabled(ITM_LIB_RTRECD,  false);
+	itm_set_library_enabled(ITM_LIB_DS18B20, false);
 	itm_set_library_enabled(ITM_LIB_GLOBAL,  true);
-	itm_set_library_enabled(ITM_LIB_SCD41,   true);
+	itm_set_library_enabled(ITM_LIB_SCD41,   false);
 	itm_set_library_enabled(ITM_LIB_FAN,     true);
 
 
@@ -502,6 +502,14 @@ static void MX_RTC_Init(void)
           sDateRestore.Date    = (uint8_t)(d & 0x1FU);
           sDateRestore.WeekDay = RTC_WEEKDAY_MONDAY;
           HAL_RTC_SetDate(&hrtc, &sDateRestore, RTC_FORMAT_BIN);
+      }
+      /*
+       * Bộ đếm RTC_CNT vẫn chạy (VBAT). Nếu đã qua 0h kể từ lần lưu DR2,
+       * GetDate (gọi GetTime bên trong) sẽ cộng thêm ngày cho DateToUpdate.
+       */
+      {
+          RTC_DateTypeDef sDateSync = {0};
+          (void)HAL_RTC_GetDate(&hrtc, &sDateSync, RTC_FORMAT_BIN);
       }
       return; /* Thời gian RTC vẫn còn, không cần reset */
   }
@@ -918,6 +926,11 @@ void StartTaskUI(void *argument)
 	/* Đọc RTC mỗi 1 giây */
 	uint32_t rtc_last_tick = osKernelGetTickCount();
 
+	/* Đồng bộ ngay lần đầu (trước đó app_menu_init chỉ set mặc định) */
+	osMutexAcquire(MutexMenuHandle, osWaitForever);
+	app_menu_update_time_from_rtc(&g_menu_ctx, &hrtc);
+	osMutexRelease(MutexMenuHandle);
+
   /* Infinite loop */
   for(;;)
   {
@@ -1145,10 +1158,7 @@ void StartTaskOutput(void *argument)
       control_last_tick = osKernelGetTickCount();
       output_ctrl_snapshot_take(&snap, &g_menu_ctx, MutexMenuHandle);
 
-      if (!output_ctrl_apply(&g_output, &ctrl, &snap, osKernelGetTickCount()))
-      {
-        output_all_off(&g_output);
-      }
+      (void)output_ctrl_apply(&g_output, &ctrl, &snap, osKernelGetTickCount());
     }
     ramduoutput = uxTaskGetStackHighWaterMark(NULL);
   }

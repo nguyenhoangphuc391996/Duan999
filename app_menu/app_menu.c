@@ -1863,14 +1863,35 @@ void app_menu_mark_dirty(app_menu_ctx_t *ctx)
  * RTC integration
  * ========================================================================= */
 
+/**
+ * @brief Lưu ngày hiện tại vào BKP DR2/DR3.
+ *        STM32F1 chỉ lưu bộ đếm giây trong RTC_CNT; ngày nằm trong RAM
+ *        (DateToUpdate). Phải ghi BKP mỗi khi ngày đổi để sau reset vẫn đúng.
+ * DR2 [15:9]=year-2000  [8:5]=month  [4:0]=day
+ * DR3 = magic 0x5A5A
+ */
+static void rtc_persist_date_to_bkp(RTC_HandleTypeDef *hrtc, const app_time_t *t)
+{
+    uint16_t date_bkp = (uint16_t)(((t->year % 100U) << 9) |
+                                   ((uint16_t)t->month << 5) |
+                                    (uint16_t)t->day);
+
+    HAL_RTCEx_BKUPWrite(hrtc, RTC_BKP_DR2, date_bkp);
+    HAL_RTCEx_BKUPWrite(hrtc, RTC_BKP_DR3, 0x5A5AU);
+}
+
 void app_menu_update_time_from_rtc(app_menu_ctx_t *ctx, RTC_HandleTypeDef *hrtc)
 {
     RTC_TimeTypeDef sTime = {0};
     RTC_DateTypeDef sDate = {0};
+    const uint8_t  prev_day   = ctx->time_cfg.day;
+    const uint8_t  prev_month = ctx->time_cfg.month;
+    const uint16_t prev_year  = ctx->time_cfg.year;
 
     /*
      * Lưu ý STM32F1 legacy RTC:
      * Phải gọi GetTime trước GetDate để latch đúng giá trị.
+     * GetTime tự cộng ngày khi bộ đếm >= 24 giờ (qua 0h).
      */
     if (HAL_RTC_GetTime(hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK) return;
     if (HAL_RTC_GetDate(hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK) return;
@@ -1881,6 +1902,12 @@ void app_menu_update_time_from_rtc(app_menu_ctx_t *ctx, RTC_HandleTypeDef *hrtc)
     ctx->time_cfg.day    = sDate.Date;
     ctx->time_cfg.month  = sDate.Month;
     ctx->time_cfg.year   = 2000U + (uint16_t)sDate.Year;
+
+    if ((ctx->time_cfg.day != prev_day) || (ctx->time_cfg.month != prev_month)
+        || (ctx->time_cfg.year != prev_year))
+    {
+        rtc_persist_date_to_bkp(hrtc, &ctx->time_cfg);
+    }
 
     /* Vẽ lại nếu đang ở màn hình làm việc */
     if (ctx->screen == SCREEN_WORK1 || ctx->screen == SCREEN_WORK2
@@ -1909,18 +1936,7 @@ void app_menu_write_time_to_rtc(app_menu_ctx_t *ctx, RTC_HandleTypeDef *hrtc)
 
     /* Ghi magic number vào BKP DR1 để giữ thời gian sau reset */
     HAL_RTCEx_BKUPWrite(hrtc, RTC_BKP_DR1, 0xA5A5U);
-
-    /*
-     * Lưu ngày vào BKP DR2/DR3 riêng để phòng trường hợp debugger
-     * xoá BKP registers của HAL nhưng không xoá DR1.
-     * DR2 [15:9] = year-2000  [8:5] = month  [4:0] = day
-     * DR3 = magic 0x5A5A
-     */
-    uint16_t date_bkp = (uint16_t)(((ctx->time_cfg.year % 100U) << 9) |
-                                   ((uint16_t)ctx->time_cfg.month << 5) |
-                                    (uint16_t)ctx->time_cfg.day);
-    HAL_RTCEx_BKUPWrite(hrtc, RTC_BKP_DR2, date_bkp);
-    HAL_RTCEx_BKUPWrite(hrtc, RTC_BKP_DR3, 0x5A5AU);
+    rtc_persist_date_to_bkp(hrtc, &ctx->time_cfg);
 
     ctx->time_rtc_dirty = false;
 }
