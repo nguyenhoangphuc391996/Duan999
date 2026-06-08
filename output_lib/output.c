@@ -20,6 +20,258 @@ static uint8_t output_clamp_u8(uint8_t value, uint8_t min_v, uint8_t max_v)
 	return value;
 }
 
+static uint8_t output_ep_lo(uint8_t close_deg, uint8_t open_deg)
+{
+	if (close_deg < open_deg)
+	{
+		return close_deg;
+	}
+	return open_deg;
+}
+
+static uint8_t output_ep_hi(uint8_t close_deg, uint8_t open_deg)
+{
+	if (close_deg > open_deg)
+	{
+		return close_deg;
+	}
+	return open_deg;
+}
+
+static uint8_t output_clamp_servo_ep(uint8_t close_deg, uint8_t open_deg, uint8_t angle_deg)
+{
+	return output_clamp_u8(angle_deg, output_ep_lo(close_deg, open_deg),
+	                       output_ep_hi(close_deg, open_deg));
+}
+
+static void output_pwm_set_compare(output_pwm_ch_t *ch, uint16_t pulse_ticks);
+static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t close_deg,
+                                            uint8_t open_deg, uint8_t angle_deg);
+
+static uint8_t output_servo_close_ep(const output_t *h, uint8_t servo_idx)
+{
+	if (servo_idx == 0U)
+	{
+		return h->servo1_close_deg;
+	}
+	return h->servo2_close_deg;
+}
+
+static uint8_t output_servo_open_ep(const output_t *h, uint8_t servo_idx)
+{
+	if (servo_idx == 0U)
+	{
+		return h->servo1_open_deg;
+	}
+	return h->servo2_open_deg;
+}
+
+void output_servo_apply_cal(output_t *h, const output_servo_cal_t *cal)
+{
+	if ((h == NULL) || (cal == NULL))
+	{
+		return;
+	}
+
+	h->servo1_close_deg = cal->servo1_close_deg;
+	h->servo1_open_deg  = cal->servo1_open_deg;
+	h->servo2_close_deg = cal->servo2_close_deg;
+	h->servo2_open_deg  = cal->servo2_open_deg;
+}
+
+uint8_t output_servo_close_deg(const output_t *h, uint8_t servo_idx)
+{
+	if (h == NULL)
+	{
+		return OUTPUT_SERVO_ANGLE_MIN_DEG;
+	}
+	return output_servo_close_ep(h, servo_idx);
+}
+
+uint8_t output_servo_open_deg(const output_t *h, uint8_t servo_idx)
+{
+	if (h == NULL)
+	{
+		return OUTPUT_SERVO_ANGLE_MAX_DEG;
+	}
+	return output_servo_open_ep(h, servo_idx);
+}
+
+uint8_t output_servo_angle_from_percent(const output_t *h, uint8_t servo_idx, uint8_t percent)
+{
+	uint8_t close_deg;
+	uint8_t open_deg;
+	int32_t span;
+	int32_t angle;
+
+	if (h == NULL)
+	{
+		return 0U;
+	}
+	if (percent > 100U)
+	{
+		percent = 100U;
+	}
+
+	close_deg = output_servo_close_ep(h, servo_idx);
+	open_deg  = output_servo_open_ep(h, servo_idx);
+	span = (int32_t)open_deg - (int32_t)close_deg;
+	angle = (int32_t)close_deg + (span * (int32_t)percent) / 100;
+	return output_clamp_servo_ep(close_deg, open_deg, (uint8_t)angle);
+}
+
+static int16_t output_servo_angle_to_permille(uint8_t close_deg, uint8_t open_deg,
+                                              uint8_t angle_deg)
+{
+	int32_t span;
+	int32_t permille;
+
+	span = (int32_t)open_deg - (int32_t)close_deg;
+	if (span == 0)
+	{
+		return 0;
+	}
+
+	permille = ((int32_t)angle_deg - (int32_t)close_deg) * 1000 / span;
+	if (permille < 0)
+	{
+		permille = 0;
+	}
+	if (permille > 1000)
+	{
+		permille = 1000;
+	}
+	return (int16_t)permille;
+}
+
+static uint8_t output_permille_to_angle(uint8_t close_deg, uint8_t open_deg, int16_t permille)
+{
+	int32_t span;
+	int32_t angle;
+
+	if (permille < 0)
+	{
+		permille = 0;
+	}
+	if (permille > 1000)
+	{
+		permille = 1000;
+	}
+
+	span = (int32_t)open_deg - (int32_t)close_deg;
+	angle = (int32_t)close_deg + (span * (int32_t)permille) / 1000;
+	return output_clamp_servo_ep(close_deg, open_deg, (uint8_t)angle);
+}
+
+static void output_servo_apply_permille(output_t *h, uint8_t servo_idx,
+                                        output_pwm_ch_t *ch, uint8_t *angle_deg,
+                                        int16_t permille)
+{
+	uint8_t close_deg;
+	uint8_t open_deg;
+	uint8_t angle;
+	uint16_t pulse;
+
+	close_deg = output_servo_close_ep(h, servo_idx);
+	open_deg  = output_servo_open_ep(h, servo_idx);
+	angle = output_permille_to_angle(close_deg, open_deg, permille);
+	*angle_deg = angle;
+	pulse = output_angle_to_pulse_ticks(h, close_deg, open_deg, angle);
+	output_pwm_set_compare(ch, pulse);
+}
+
+static void output_servo_set_target_permille(int16_t *target_permille,
+                                               uint8_t close_deg, uint8_t open_deg,
+                                               uint8_t angle_deg)
+{
+	angle_deg = output_clamp_servo_ep(close_deg, open_deg, angle_deg);
+	*target_permille = output_servo_angle_to_permille(close_deg, open_deg, angle_deg);
+}
+
+static void output_servo_ramp_step(int16_t *current, int16_t target, int16_t step)
+{
+	if (*current < target)
+	{
+		*current += step;
+		if (*current > target)
+		{
+			*current = target;
+		}
+	}
+	else if (*current > target)
+	{
+		*current -= step;
+		if (*current < target)
+		{
+			*current = target;
+		}
+	}
+}
+
+static void output_servo_sync_present(output_t *h)
+{
+	h->servo1_permille = h->servo1_target_permille;
+	h->servo2_permille = h->servo2_target_permille;
+	output_servo_apply_permille(h, 0U, &h->servo1, &h->servo1_angle_deg, h->servo1_permille);
+	output_servo_apply_permille(h, 1U, &h->servo2, &h->servo2_angle_deg, h->servo2_permille);
+}
+
+void output_servo_ramp_update(output_t *h, uint32_t now_tick)
+{
+	uint32_t elapsed_ms;
+	int16_t step;
+	bool servo1_moved = false;
+	bool servo2_moved = false;
+
+	if ((h == NULL) || !h->initialized)
+	{
+		return;
+	}
+
+	if (h->servo_ramp_last_tick == 0U)
+	{
+		h->servo_ramp_last_tick = now_tick;
+		return;
+	}
+
+	elapsed_ms = now_tick - h->servo_ramp_last_tick;
+	h->servo_ramp_last_tick = now_tick;
+	if (elapsed_ms == 0U)
+	{
+		return;
+	}
+	if (elapsed_ms > 200U)
+	{
+		elapsed_ms = 200U;
+	}
+
+	step = (int16_t)((1000U * elapsed_ms) / OUTPUT_SERVO_RAMP_FULL_MS);
+	if (step < 1)
+	{
+		step = 1;
+	}
+
+	if (h->servo1_permille != h->servo1_target_permille)
+	{
+		output_servo_ramp_step(&h->servo1_permille, h->servo1_target_permille, step);
+		servo1_moved = true;
+	}
+	if (h->servo2_permille != h->servo2_target_permille)
+	{
+		output_servo_ramp_step(&h->servo2_permille, h->servo2_target_permille, step);
+		servo2_moved = true;
+	}
+
+	if (servo1_moved)
+	{
+		output_servo_apply_permille(h, 0U, &h->servo1, &h->servo1_angle_deg, h->servo1_permille);
+	}
+	if (servo2_moved)
+	{
+		output_servo_apply_permille(h, 1U, &h->servo2, &h->servo2_angle_deg, h->servo2_permille);
+	}
+}
+
 static uint16_t output_tim_period_ticks(const TIM_HandleTypeDef *htim, uint16_t configured)
 {
 	if (configured != 0U)
@@ -106,13 +358,15 @@ static bool output_pwm_start(output_pwm_ch_t *ch)
 	return (HAL_TIM_PWM_Start(ch->htim, ch->channel) == HAL_OK);
 }
 
-static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t angle_deg)
+static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t close_deg,
+                                            uint8_t open_deg, uint8_t angle_deg)
 {
 	uint16_t pmin;
 	uint16_t pmax;
-	uint32_t pulse;
+	int32_t span_deg;
+	int32_t pulse;
 
-	angle_deg = output_clamp_u8(angle_deg, OUTPUT_SERVO_ANGLE_MIN_DEG, OUTPUT_SERVO_ANGLE_MAX_DEG);
+	angle_deg = output_clamp_servo_ep(close_deg, open_deg, angle_deg);
 	pmin = output_servo_pulse_min(h);
 	pmax = output_servo_pulse_max(h);
 	if (pmax <= pmin)
@@ -120,37 +374,61 @@ static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t angle_deg
 		return pmin;
 	}
 
-	pulse = (uint32_t)pmin
-	        + ((uint32_t)angle_deg * (uint32_t)(pmax - pmin))
-	          / (uint32_t)OUTPUT_SERVO_ANGLE_MAX_DEG;
+	span_deg = (int32_t)open_deg - (int32_t)close_deg;
+	if (span_deg == 0)
+	{
+		return pmin;
+	}
+
+	pulse = (int32_t)pmin
+	        + ((int32_t)(pmax - pmin)
+	           * ((int32_t)angle_deg - (int32_t)close_deg))
+	          / span_deg;
+	if (pulse < (int32_t)pmin)
+	{
+		return pmin;
+	}
+	if (pulse > (int32_t)pmax)
+	{
+		return pmax;
+	}
 	return (uint16_t)pulse;
 }
 
-static uint8_t output_pulse_to_angle_deg(const output_t *h, uint16_t pulse_ticks)
+static uint8_t output_pulse_to_angle_deg(const output_t *h, uint8_t close_deg,
+                                         uint8_t open_deg, uint16_t pulse_ticks)
 {
 	uint16_t pmin;
 	uint16_t pmax;
-	uint32_t span;
-	uint32_t angle;
+	int32_t span_deg;
+	int32_t span_pulse;
+	int32_t angle;
 
 	pmin = output_servo_pulse_min(h);
 	pmax = output_servo_pulse_max(h);
 	if (pmax <= pmin)
 	{
-		return 0U;
+		return close_deg;
 	}
 	if (pulse_ticks <= pmin)
 	{
-		return OUTPUT_SERVO_ANGLE_MIN_DEG;
+		return close_deg;
 	}
 	if (pulse_ticks >= pmax)
 	{
-		return OUTPUT_SERVO_ANGLE_MAX_DEG;
+		return open_deg;
 	}
 
-	span = (uint32_t)(pmax - pmin);
-	angle = ((uint32_t)(pulse_ticks - pmin) * (uint32_t)OUTPUT_SERVO_ANGLE_MAX_DEG) / span;
-	return (uint8_t)angle;
+	span_deg = (int32_t)open_deg - (int32_t)close_deg;
+	span_pulse = (int32_t)pmax - (int32_t)pmin;
+	if ((span_deg == 0) || (span_pulse == 0))
+	{
+		return close_deg;
+	}
+
+	angle = (int32_t)close_deg
+	        + (span_deg * ((int32_t)pulse_ticks - (int32_t)pmin)) / span_pulse;
+	return output_clamp_servo_ep(close_deg, open_deg, (uint8_t)angle);
 }
 
 static uint16_t output_clamp_servo_pulse(const output_t *h, uint16_t pulse_ticks)
@@ -217,6 +495,15 @@ void output_defaults(output_t *h)
 	h->fan_percent = 0U;
 	h->servo1_angle_deg = 0U;
 	h->servo2_angle_deg = 0U;
+	h->servo1_permille = 0;
+	h->servo2_permille = 0;
+	h->servo1_target_permille = 0;
+	h->servo2_target_permille = 0;
+	h->servo_ramp_last_tick = 0U;
+	h->servo1_close_deg = OUTPUT_SERVO_ANGLE_MIN_DEG;
+	h->servo1_open_deg  = OUTPUT_SERVO_ANGLE_MAX_DEG;
+	h->servo2_close_deg = OUTPUT_SERVO_ANGLE_MIN_DEG;
+	h->servo2_open_deg  = OUTPUT_SERVO_ANGLE_MAX_DEG;
 	h->heater_on = false;
 	h->lamp_on = false;
 	h->mist_on = false;
@@ -257,6 +544,8 @@ bool output_init(output_t *h)
 	}
 
 	output_all_off(h);
+	output_servo_sync_present(h);
+	h->servo_ramp_last_tick = 0U;
 	h->initialized = true;
 	return true;
 }
@@ -272,8 +561,13 @@ void output_all_off(output_t *h)
 	output_lamp_set(h, false);
 	output_mist_set(h, false);
 	output_fan_set_percent(h, 0U);
-	output_servo1_set_angle(h, OUTPUT_SERVO_ANGLE_MIN_DEG);
-	output_servo2_set_angle(h, OUTPUT_SERVO_ANGLE_MIN_DEG);
+
+	output_servo_set_target_permille(&h->servo1_target_permille,
+	                                 h->servo1_close_deg, h->servo1_open_deg,
+	                                 h->servo1_close_deg);
+	output_servo_set_target_permille(&h->servo2_target_permille,
+	                                 h->servo2_close_deg, h->servo2_open_deg,
+	                                 h->servo2_close_deg);
 }
 
 void output_heater_set(output_t *h, bool on)
@@ -357,58 +651,95 @@ uint8_t output_fan_get_percent(const output_t *h)
 	return h->fan_percent;
 }
 
-void output_servo1_set_angle(output_t *h, uint8_t angle_deg)
+void output_servo_set_angle_live(output_t *h, uint8_t servo_num, uint8_t angle_deg)
 {
-	uint16_t pulse;
+	uint8_t close_deg;
+	uint8_t open_deg;
+	int16_t permille;
 
 	if (h == NULL)
 	{
 		return;
 	}
 
-	angle_deg = output_clamp_u8(angle_deg, OUTPUT_SERVO_ANGLE_MIN_DEG, OUTPUT_SERVO_ANGLE_MAX_DEG);
-	h->servo1_angle_deg = angle_deg;
-	pulse = output_angle_to_pulse_ticks(h, angle_deg);
-	output_pwm_set_compare(&h->servo1, pulse);
+	if (servo_num == 1U)
+	{
+		close_deg = h->servo1_close_deg;
+		open_deg  = h->servo1_open_deg;
+		angle_deg = output_clamp_servo_ep(close_deg, open_deg, angle_deg);
+		permille = output_servo_angle_to_permille(close_deg, open_deg, angle_deg);
+		h->servo1_target_permille = permille;
+		h->servo1_permille = permille;
+		output_servo_apply_permille(h, 0U, &h->servo1, &h->servo1_angle_deg, permille);
+	}
+	else if (servo_num == 2U)
+	{
+		close_deg = h->servo2_close_deg;
+		open_deg  = h->servo2_open_deg;
+		angle_deg = output_clamp_servo_ep(close_deg, open_deg, angle_deg);
+		permille = output_servo_angle_to_permille(close_deg, open_deg, angle_deg);
+		h->servo2_target_permille = permille;
+		h->servo2_permille = permille;
+		output_servo_apply_permille(h, 1U, &h->servo2, &h->servo2_angle_deg, permille);
+	}
+}
+
+void output_servo1_set_angle(output_t *h, uint8_t angle_deg)
+{
+	if (h == NULL)
+	{
+		return;
+	}
+
+	output_servo_set_target_permille(&h->servo1_target_permille,
+	                                 h->servo1_close_deg, h->servo1_open_deg,
+	                                 angle_deg);
 }
 
 void output_servo2_set_angle(output_t *h, uint8_t angle_deg)
 {
-	uint16_t pulse;
-
 	if (h == NULL)
 	{
 		return;
 	}
 
-	angle_deg = output_clamp_u8(angle_deg, OUTPUT_SERVO_ANGLE_MIN_DEG, OUTPUT_SERVO_ANGLE_MAX_DEG);
-	h->servo2_angle_deg = angle_deg;
-	pulse = output_angle_to_pulse_ticks(h, angle_deg);
-	output_pwm_set_compare(&h->servo2, pulse);
+	output_servo_set_target_permille(&h->servo2_target_permille,
+	                                 h->servo2_close_deg, h->servo2_open_deg,
+	                                 angle_deg);
 }
 
 void output_servo1_set_pulse_ticks(output_t *h, uint16_t pulse_ticks)
 {
+	uint8_t angle_deg;
+
 	if (h == NULL)
 	{
 		return;
 	}
 
 	pulse_ticks = output_clamp_servo_pulse(h, pulse_ticks);
-	h->servo1_angle_deg = output_pulse_to_angle_deg(h, pulse_ticks);
-	output_pwm_set_compare(&h->servo1, pulse_ticks);
+	angle_deg = output_pulse_to_angle_deg(h, h->servo1_close_deg, h->servo1_open_deg,
+	                                      pulse_ticks);
+	output_servo_set_target_permille(&h->servo1_target_permille,
+	                                 h->servo1_close_deg, h->servo1_open_deg,
+	                                 angle_deg);
 }
 
 void output_servo2_set_pulse_ticks(output_t *h, uint16_t pulse_ticks)
 {
+	uint8_t angle_deg;
+
 	if (h == NULL)
 	{
 		return;
 	}
 
 	pulse_ticks = output_clamp_servo_pulse(h, pulse_ticks);
-	h->servo2_angle_deg = output_pulse_to_angle_deg(h, pulse_ticks);
-	output_pwm_set_compare(&h->servo2, pulse_ticks);
+	angle_deg = output_pulse_to_angle_deg(h, h->servo2_close_deg, h->servo2_open_deg,
+	                                      pulse_ticks);
+	output_servo_set_target_permille(&h->servo2_target_permille,
+	                                 h->servo2_close_deg, h->servo2_open_deg,
+	                                 angle_deg);
 }
 
 uint8_t output_servo1_get_angle(const output_t *h)
@@ -417,7 +748,8 @@ uint8_t output_servo1_get_angle(const output_t *h)
 	{
 		return 0U;
 	}
-	return h->servo1_angle_deg;
+	return output_permille_to_angle(h->servo1_close_deg, h->servo1_open_deg,
+	                                h->servo1_permille);
 }
 
 uint8_t output_servo2_get_angle(const output_t *h)
@@ -426,7 +758,8 @@ uint8_t output_servo2_get_angle(const output_t *h)
 	{
 		return 0U;
 	}
-	return h->servo2_angle_deg;
+	return output_permille_to_angle(h->servo2_close_deg, h->servo2_open_deg,
+	                                h->servo2_permille);
 }
 
 bool output_apply_cmd(output_t *h, const output_cmd_t *cmd)

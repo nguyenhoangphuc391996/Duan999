@@ -36,6 +36,11 @@ typedef struct __attribute__((packed))
     uint16_t        fan_learned_rpm[FAN_LEARN_STEPS]; /* RPM tại 0%,10%,...,100% */
     uint8_t         fan_learn_done;   /* 1 = dữ liệu hợp lệ */
     uint8_t         _pad_fan;         /* căn chỉnh chẵn cho halfword write */
+    /* v11: góc servo đã học */
+    uint8_t         servo1_close_deg;
+    uint8_t         servo1_open_deg;
+    uint8_t         servo2_close_deg;
+    uint8_t         servo2_open_deg;
     uint32_t        checksum;
 } app_settings_flash_t;
 
@@ -82,7 +87,8 @@ void app_settings_load(app_menu_ctx_t *ctx)
     /* Kiểm tra version (v10 hiện tại; v7, v8, v9 được migrate) */
     if (valid && (fs->version != APP_SETTINGS_VERSION))
     {
-        if (fs->version != 7U && fs->version != 8U && fs->version != 9U)
+        if (fs->version != 7U && fs->version != 8U && fs->version != 9U
+            && fs->version != 10U)
         {
             valid = false;
         }
@@ -123,8 +129,8 @@ void app_settings_load(app_menu_ctx_t *ctx)
         }
     }
 
-    /* v9/v10: nạp dữ liệu học tốc độ quạt (v7/v8 không có → giữ mặc định 0) */
-    if (fs->version == (uint8_t)APP_SETTINGS_VERSION)
+    /* v9/v10/v11: nạp dữ liệu học tốc độ quạt (v7/v8 không có → giữ mặc định 0) */
+    if ((fs->version == (uint8_t)APP_SETTINGS_VERSION) || (fs->version == 10U))
     {
         memcpy(ctx->fan.learned_rpm, fs->fan_learned_rpm,
                sizeof(ctx->fan.learned_rpm));
@@ -138,6 +144,26 @@ void app_settings_load(app_menu_ctx_t *ctx)
             ctx->fan.learned_rpm[i] = FAN_PULSES_TO_RPM((uint32_t)fs->fan_learned_rpm[i]);
         }
         ctx->fan.learn_done = fs->fan_learn_done;
+    }
+
+    if (fs->version == (uint8_t)APP_SETTINGS_VERSION)
+    {
+        if (fs->servo1_close_deg <= 180U)
+        {
+            ctx->servo_cal.servo1_close_deg = fs->servo1_close_deg;
+        }
+        if (fs->servo1_open_deg <= 180U)
+        {
+            ctx->servo_cal.servo1_open_deg = fs->servo1_open_deg;
+        }
+        if (fs->servo2_close_deg <= 180U)
+        {
+            ctx->servo_cal.servo2_close_deg = fs->servo2_close_deg;
+        }
+        if (fs->servo2_open_deg <= 180U)
+        {
+            ctx->servo_cal.servo2_open_deg = fs->servo2_open_deg;
+        }
     }
 
     flash_log("[FLASH] Load settings OK");
@@ -158,6 +184,10 @@ void app_settings_save(app_menu_ctx_t *ctx)
     memcpy(s.fan_learned_rpm, ctx->fan.learned_rpm, sizeof(s.fan_learned_rpm));
     s.fan_learn_done = ctx->fan.learn_done;
     s._pad_fan       = 0U;
+    s.servo1_close_deg = ctx->servo_cal.servo1_close_deg;
+    s.servo1_open_deg  = ctx->servo_cal.servo1_open_deg;
+    s.servo2_close_deg = ctx->servo_cal.servo2_close_deg;
+    s.servo2_open_deg  = ctx->servo_cal.servo2_open_deg;
     s.checksum    = calc_checksum(&s);
 
     /* ---- Ghi Flash ---- */

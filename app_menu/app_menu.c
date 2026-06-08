@@ -71,8 +71,21 @@ static const char * const g_main_menu_items[] = {
     "Cai dat MinMax",
     "Vi tri DS18B20",
     "Hoc toc do quat",
+    "Hoc goc servo",
 };
-#define MAIN_MENU_COUNT   5U
+#define MAIN_MENU_COUNT   6U
+
+static const char * const g_servo_learn_items[] = {
+    "Servo 1",
+    "Servo 2",
+};
+#define SERVO_LEARN_ITEM_COUNT  2U
+
+static const char * const g_servo_learn_side_items[] = {
+    "Hoc goc dong",
+    "Hoc goc mo",
+};
+#define SERVO_LEARN_SIDE_COUNT  2U
 
 static const char * const g_fan_learn_items[] = {
     "Hoc",
@@ -526,7 +539,7 @@ static void render_work3(app_menu_ctx_t *ctx)
     {
         /* Thanh trùng:
          * Dòng 0: BD luôn bắt đầu tại cột 10 (index 9)
-         * Dòng 1: "   To120  Nho110"
+         * Dòng 1: "  To 90% Nho 10%"
          */
         snprintf(line, sizeof(line), "%c  T%d-%d",
                  mode_c,
@@ -539,9 +552,9 @@ static void render_work3(app_menu_ctx_t *ctx)
         lcd_put_cur(0, 0);
         lcd_send_line(line);
 
-        snprintf(line, sizeof(line), "   To%u  Nho%u",
-                 (unsigned)cfg->sg90_mo_to_deg,
-                 (unsigned)cfg->sg90_mo_nho_deg);
+        snprintf(line, sizeof(line), "  To%3u%% Nho%3u%%",
+                 (unsigned)cfg->sg90_mo_to_pct,
+                 (unsigned)cfg->sg90_mo_nho_pct);
         lcd_put_cur(1, 0);
         lcd_send_line(line);
     }
@@ -591,6 +604,30 @@ static void render_work3(app_menu_ctx_t *ctx)
 static void render_fan_learn_menu(app_menu_ctx_t *ctx)
 {
     render_title_item("Toc do quat", g_fan_learn_items, ctx->cursor);
+}
+
+static void render_servo_learn_menu(app_menu_ctx_t *ctx)
+{
+    render_title_item("Hoc goc servo", g_servo_learn_items, ctx->cursor);
+}
+
+static void render_servo_learn_side(app_menu_ctx_t *ctx)
+{
+    char title[17];
+
+    snprintf(title, sizeof(title), "Servo %u",
+             (unsigned)(ctx->servo_learn_servo + 1U));
+    render_title_item(title, g_servo_learn_side_items, ctx->cursor);
+}
+
+static void render_servo_learn_edit(app_menu_ctx_t *ctx)
+{
+    char field[17];
+
+    snprintf(field, sizeof(field), "S%u %s",
+             (unsigned)(ctx->servo_learn_servo + 1U),
+             (ctx->servo_learn_side == 0U) ? "dong" : "mo");
+    render_edit(field, ctx->edit_value, ctx->edit_min, ctx->edit_max);
 }
 
 static void render_fan_learn_run(app_menu_ctx_t *ctx)
@@ -724,11 +761,11 @@ static void render_minmax_edit(app_menu_ctx_t *ctx)
         }
         else if (ctx->edit_param_index == TT_PARAM_SG90_MO_TO)
         {
-            snprintf(field_name, sizeof(field_name), "Mo muc to");
+            snprintf(field_name, sizeof(field_name), "Mo to %%");
         }
         else if (ctx->edit_param_index == TT_PARAM_SG90_MO_NHO)
         {
-            snprintf(field_name, sizeof(field_name), "Mo muc nho");
+            snprintf(field_name, sizeof(field_name), "Mo nho %%");
         }
         else
         {
@@ -893,7 +930,7 @@ static void get_minmax_range(app_menu_ctx_t *ctx,
         case TT_PARAM_SG90_MO_TO:
         case TT_PARAM_SG90_MO_NHO:
             *vmin = 0;
-            *vmax = 180;
+            *vmax = 100;
             break;
         default:
             *vmin = 0;
@@ -938,9 +975,9 @@ static int32_t get_minmax_value(app_menu_ctx_t *ctx)
         case TT_PARAM_TIME_BD:
             return (int32_t)cfg->thanh_trung_initial_minutes;
         case TT_PARAM_SG90_MO_TO:
-            return (int32_t)cfg->sg90_mo_to_deg;
+            return (int32_t)cfg->sg90_mo_to_pct;
         case TT_PARAM_SG90_MO_NHO:
-            return (int32_t)cfg->sg90_mo_nho_deg;
+            return (int32_t)cfg->sg90_mo_nho_pct;
         default:
             return 0;
         }
@@ -985,10 +1022,10 @@ static void save_minmax_value(app_menu_ctx_t *ctx)
             cfg->thanh_trung_initial_minutes = (uint16_t)ctx->edit_value;
             break;
         case TT_PARAM_SG90_MO_TO:
-            cfg->sg90_mo_to_deg = (uint8_t)ctx->edit_value;
+            cfg->sg90_mo_to_pct = (uint8_t)ctx->edit_value;
             break;
         case TT_PARAM_SG90_MO_NHO:
-            cfg->sg90_mo_nho_deg = (uint8_t)ctx->edit_value;
+            cfg->sg90_mo_nho_pct = (uint8_t)ctx->edit_value;
             break;
         default:
             break;
@@ -1114,6 +1151,7 @@ static void handle_main_menu(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
         case 2U: nav_push(ctx, SCREEN_MINMAX_MODE);    break;
         case 3U: nav_push(ctx, SCREEN_DS18B20_POS);    break;
         case 4U: nav_push(ctx, SCREEN_FAN_LEARN_MENU); break;
+        case 5U: nav_push(ctx, SCREEN_SERVO_LEARN_MENU); break;
         default: break;
         }
         break;
@@ -1619,6 +1657,125 @@ static void handle_fan_learn_menu(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
     }
 }
 
+static uint8_t *servo_learn_cal_ptr(app_menu_ctx_t *ctx)
+{
+    if (ctx->servo_learn_servo == 0U)
+    {
+        if (ctx->servo_learn_side == 0U)
+        {
+            return &ctx->servo_cal.servo1_close_deg;
+        }
+        return &ctx->servo_cal.servo1_open_deg;
+    }
+    if (ctx->servo_learn_side == 0U)
+    {
+        return &ctx->servo_cal.servo2_close_deg;
+    }
+    return &ctx->servo_cal.servo2_open_deg;
+}
+
+static void enter_servo_learn_edit(app_menu_ctx_t *ctx)
+{
+    uint8_t *pdeg = servo_learn_cal_ptr(ctx);
+
+    ctx->servo_learn_saved_deg  = *pdeg;
+    ctx->edit_min               = 0;
+    ctx->edit_max               = 180;
+    ctx->edit_value             = (int32_t)*pdeg;
+    ctx->servo_learn_angle_deg  = *pdeg;
+    ctx->servo_learn_active     = 1U;
+    nav_push(ctx, SCREEN_SERVO_LEARN_EDIT);
+}
+
+static void save_servo_learn_edit(app_menu_ctx_t *ctx)
+{
+    uint8_t *pdeg = servo_learn_cal_ptr(ctx);
+
+    *pdeg = (uint8_t)ctx->edit_value;
+    ctx->servo_learn_active = 0U;
+    ctx->settings_dirty     = true;
+}
+
+static void cancel_servo_learn_edit(app_menu_ctx_t *ctx)
+{
+    uint8_t *pdeg = servo_learn_cal_ptr(ctx);
+
+    *pdeg = ctx->servo_learn_saved_deg;
+    ctx->servo_learn_angle_deg = ctx->servo_learn_saved_deg;
+    ctx->servo_learn_active    = 0U;
+}
+
+static void handle_servo_learn_menu(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
+{
+    switch (ev)
+    {
+    case RTRECD_EVENT_ROTATE_CW:
+        list_cw(ctx, SERVO_LEARN_ITEM_COUNT);
+        break;
+    case RTRECD_EVENT_ROTATE_CCW:
+        list_ccw(ctx);
+        break;
+    case RTRECD_EVENT_BUTTON_SHORT:
+        ctx->servo_learn_servo = ctx->cursor;
+        nav_push(ctx, SCREEN_SERVO_LEARN_SIDE);
+        break;
+    case RTRECD_EVENT_BUTTON_LONG:
+        nav_pop(ctx);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_servo_learn_side(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
+{
+    switch (ev)
+    {
+    case RTRECD_EVENT_ROTATE_CW:
+        list_cw(ctx, SERVO_LEARN_SIDE_COUNT);
+        break;
+    case RTRECD_EVENT_ROTATE_CCW:
+        list_ccw(ctx);
+        break;
+    case RTRECD_EVENT_BUTTON_SHORT:
+        ctx->servo_learn_side = ctx->cursor;
+        enter_servo_learn_edit(ctx);
+        break;
+    case RTRECD_EVENT_BUTTON_LONG:
+        nav_pop(ctx);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_servo_learn_edit(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
+{
+    switch (ev)
+    {
+    case RTRECD_EVENT_ROTATE_CW:
+        edit_cw(ctx);
+        ctx->servo_learn_angle_deg = (uint8_t)ctx->edit_value;
+        ctx->dirty = true;
+        break;
+    case RTRECD_EVENT_ROTATE_CCW:
+        edit_ccw(ctx);
+        ctx->servo_learn_angle_deg = (uint8_t)ctx->edit_value;
+        ctx->dirty = true;
+        break;
+    case RTRECD_EVENT_BUTTON_SHORT:
+        save_servo_learn_edit(ctx);
+        nav_pop(ctx);
+        break;
+    case RTRECD_EVENT_BUTTON_LONG:
+        cancel_servo_learn_edit(ctx);
+        nav_pop(ctx);
+        break;
+    default:
+        break;
+    }
+}
+
 static void handle_fan_learn_run(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 {
     switch (ev)
@@ -1668,6 +1825,13 @@ void app_menu_init(app_menu_ctx_t *ctx)
     /* DS18B20: số cảm biến mặc định */
     ctx->ds18b20_target_count = 4U;
 
+    /* Góc servo mặc định (trước khi load Flash) */
+    ctx->servo_cal.servo1_close_deg = OUTPUT_SERVO_ANGLE_MIN_DEG;
+    ctx->servo_cal.servo1_open_deg  = OUTPUT_SERVO_ANGLE_MAX_DEG;
+    ctx->servo_cal.servo2_close_deg = OUTPUT_SERVO_ANGLE_MIN_DEG;
+    ctx->servo_cal.servo2_open_deg  = OUTPUT_SERVO_ANGLE_MAX_DEG;
+    ctx->servo_learn_active         = 0U;
+
     /* MinMax mặc định cho cả 5 chế độ */
     for (uint8_t i = 0U; i < 5U; i++)
     {
@@ -1687,8 +1851,8 @@ void app_menu_init(app_menu_ctx_t *ctx)
 
         /* Thanh trùng defaults */
         ctx->mode_cfg[i].thanh_trung_initial_minutes = 10U;
-        ctx->mode_cfg[i].sg90_mo_to_deg  = 180U;
-        ctx->mode_cfg[i].sg90_mo_nho_deg = 0U;
+        ctx->mode_cfg[i].sg90_mo_to_pct  = 100U;
+        ctx->mode_cfg[i].sg90_mo_nho_pct = 0U;
     }
 
     /* --- [0] Chay to: T 32-35, A 70-80, CO2 4000-5000, den khong su dung --- */
@@ -1734,8 +1898,8 @@ void app_menu_init(app_menu_ctx_t *ctx)
     ctx->mode_cfg[4].nhiet_do.min = 70;
     ctx->mode_cfg[4].nhiet_do.max = 75;
     ctx->mode_cfg[4].thanh_trung_initial_minutes = 30U;
-    ctx->mode_cfg[4].sg90_mo_to_deg  = 170U;
-    ctx->mode_cfg[4].sg90_mo_nho_deg = 10U;
+    ctx->mode_cfg[4].sg90_mo_to_pct  = 90U;
+    ctx->mode_cfg[4].sg90_mo_nho_pct = 10U;
 
     /*
      * Load từ Flash (đè lên giá trị mặc định ở trên nếu Flash hợp lệ).
@@ -1764,6 +1928,9 @@ void app_menu_handle_event(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
     case SCREEN_DS18B20_LEARN:  handle_ds18b20_learn(ctx, ev); break;
     case SCREEN_FAN_LEARN_MENU: handle_fan_learn_menu(ctx, ev); break;
     case SCREEN_FAN_LEARN_RUN:  handle_fan_learn_run(ctx, ev);  break;
+    case SCREEN_SERVO_LEARN_MENU: handle_servo_learn_menu(ctx, ev); break;
+    case SCREEN_SERVO_LEARN_SIDE: handle_servo_learn_side(ctx, ev); break;
+    case SCREEN_SERVO_LEARN_EDIT: handle_servo_learn_edit(ctx, ev); break;
     default: break;
     }
 }
@@ -1806,6 +1973,9 @@ void app_menu_render(app_menu_ctx_t *ctx)
     case SCREEN_DS18B20_LEARN:  render_ds18b20_learn(ctx);  break;
     case SCREEN_FAN_LEARN_MENU: render_fan_learn_menu(ctx); break;
     case SCREEN_FAN_LEARN_RUN:  render_fan_learn_run(ctx);  break;
+    case SCREEN_SERVO_LEARN_MENU: render_servo_learn_menu(ctx); break;
+    case SCREEN_SERVO_LEARN_SIDE: render_servo_learn_side(ctx); break;
+    case SCREEN_SERVO_LEARN_EDIT: render_servo_learn_edit(ctx); break;
     default: break;
     }
 }

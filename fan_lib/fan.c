@@ -5,6 +5,7 @@
  *   1. Học tốc độ RPM (coast-stop → sweep 0%→100%)
  *   2. Giám sát RPM so với profile đã học (cứ 5 s/lần, cần 2 lần vượt ngưỡng)
  *   3. Giám sát an toàn cơ học (<100 RPM liên tục 2 s → tắt ngay)
+ *      (kể cả Nghỉ / Thanh trùng khi không cấp PWM)
  *   4. Phục hồi lỗi:
  *      - Lỗi cơ học: RPM quay lên >= 100 RPM → mở lại
  *      - Lỗi lệch học: chờ RPM về mức học ở 0% → quay tay >= 100 RPM → mở lại
@@ -319,6 +320,25 @@ static bool s_coast_considered_stopped(fan_ctx_t *fc, uint32_t pps, uint16_t rpm
     return s_tach_stopped(pps);
 }
 
+/** true nếu chế độ không cấp PWM quạt (Nghỉ / Thanh trùng). */
+static bool s_fan_off_mode(app_mode_t mode)
+{
+    return ((mode == MODE_NGHI) || (mode == MODE_THANH_TRUNG));
+}
+
+static void s_try_clear_learn_alarm(fan_ctx_t *fc)
+{
+    osMutexAcquire(fc->mutex, osWaitForever);
+    bool clear = (fc->menu_ctx->fan.alarm_active != 0U) &&
+                 (fc->menu_ctx->fan.low_speed_fault == 0U);
+    osMutexRelease(fc->mutex);
+
+    if (clear)
+    {
+        s_recovery_learn_alarm(fc);
+    }
+}
+
 /* =========================================================================
  * Chờ quạt dừng hẳn (trước khi bắt đầu học)
  * ========================================================================= */
@@ -507,11 +527,58 @@ static void s_safety_monitor(fan_ctx_t *fc, uint32_t now_tick)
         return;
     }
 
-    /* Không giám sát khi đang học, hoặc chế độ không có quạt */
-    if ((learn_active != 0U) || (mode == MODE_NGHI) || (mode == MODE_THANH_TRUNG))
+    /* Đang học → không giám sát vận hành */
+    if (learn_active != 0U)
     {
         s_slow_sec  = 0U;
         s_last_duty = duty;
+        return;
+    }
+
+    /*
+     * Nghỉ / Thanh trùng: không cấp PWM nhưng vẫn theo dõi TACH
+     * (phòng đứt dây PWM → quạt chạy max).
+     */
+    if (s_fan_off_mode(mode))
+    {
+        uint16_t learned_0 = 0U;
+        uint8_t  learn_done = 0U;
+
+        osMutexAcquire(fc->mutex, osWaitForever);
+        learned_0  = fc->menu_ctx->fan.learned_rpm[0];
+        learn_done = fc->menu_ctx->fan.learn_done;
+        osMutexRelease(fc->mutex);
+
+        /*
+         * Quạt 0% vẫn quay nhẹ (coast) – bình thường khi RPM ≈ mức học ở 0%.
+         * 0 RPM hoặc < FAN_FAULT_RPM_MIN (và không đúng mức coast) = kẹt.
+         */
+        if ((learn_done != 0U) &&
+            s_rpm_within_tolerance(rpm, learned_0, FAN_LEARN_TOLERANCE_PERCENT))
+        {
+            s_slow_sec = 0U;
+            return;
+        }
+
+        if (rpm < (uint16_t)FAN_FAULT_RPM_MIN)
+        {
+            if (s_slow_sec < 255U) { s_slow_sec++; }
+
+            FAN_LOG("Off-mode stuck: rpm=%u (0=ket, count=%u/%u)\r\n",
+                    (unsigned)rpm,
+                    (unsigned)s_slow_sec, (unsigned)FAN_LOW_SPEED_FAULT_SEC);
+
+            if (s_slow_sec >= FAN_LOW_SPEED_FAULT_SEC)
+            {
+                s_enter_low_speed_fault(fc, rpm, 0U);
+                s_slow_sec = 0U;
+            }
+        }
+        else
+        {
+            /* RPM cao bất thường – khối Monitor off-mode xử lý lỗi lệch học */
+            s_slow_sec = 0U;
+        }
         return;
     }
 
@@ -813,18 +880,77 @@ void fan_task_body(fan_ctx_t *fc)
                             FAN_LOG("Monitor: RPM back in tolerance\r\n");
                         }
                         s_fault_hits = 0U;
-
-                        /* Xóa alarm nếu RPM đã về đúng (không xóa nếu còn low_speed_fault) */
-                        osMutexAcquire(fc->mutex, osWaitForever);
-                        bool clear = (fc->menu_ctx->fan.alarm_active != 0U) &&
-                                     (fc->menu_ctx->fan.low_speed_fault == 0U);
-                        osMutexRelease(fc->mutex);
-
-                        if (clear)
-                        {
-                            s_recovery_learn_alarm(fc);
-                        }
+                        s_try_clear_learn_alarm(fc);
                     }
+                }
+            }
+            else if ((fan_done != 0U) && (!force_off) &&
+                     s_fan_off_mode(active_mode) && settle_ok)
+            {
+                /*
+                 * Nghỉ / Thanh trùng: kỳ vọng RPM ≈ mức học ở 0% (quay nhẹ).
+                 * 0 RPM = kẹt; < FAN_FAULT_RPM_MIN = kẹt (s_safety_monitor).
+                 * Cao bất thường (vd. đứt PWM) → lỗi lệch học.
+                 */
+                uint16_t learned_0 = learned[0];
+                uint16_t meas_rpm  = s_measure_rpm_avg(fc,
+                                                       FAN_LEARN_STEP_MEASURE_SEC);
+
+                FAN_LOG("Monitor off-mode: meas=%u RPM exp0%%=%u RPM\r\n",
+                        (unsigned)meas_rpm, (unsigned)learned_0);
+
+                if (s_rpm_within_tolerance(meas_rpm, learned_0,
+                                           FAN_LEARN_TOLERANCE_PERCENT))
+                {
+                    if (s_fault_hits > 0U)
+                    {
+                        FAN_LOG("Monitor off-mode: RPM back in tolerance\r\n");
+                    }
+                    s_fault_hits = 0U;
+                    s_try_clear_learn_alarm(fc);
+                }
+                else if (meas_rpm >= (uint16_t)FAN_FAULT_RPM_MIN)
+                {
+                    if (s_fault_hits < 255U) { s_fault_hits++; }
+                    FAN_LOG("Monitor off-mode: unexpected RPM (hit %u/%u)\r\n",
+                            (unsigned)s_fault_hits,
+                            (unsigned)FAN_LEARN_FAULT_CONFIRM_COUNT);
+
+                    if (s_fault_hits >= FAN_LEARN_FAULT_CONFIRM_COUNT)
+                    {
+                        s_enter_learn_fault(fc, meas_rpm, learned_0, 0U);
+                        s_fault_hits = 0U;
+                    }
+                }
+                else
+                {
+                    s_fault_hits = 0U;
+                }
+            }
+            else if ((fan_done == 0U) && (!force_off) &&
+                     s_fan_off_mode(active_mode) && settle_ok)
+            {
+                /* Chưa học profile: RPM cao khi không cấp PWM → cảnh báo */
+                uint16_t meas_rpm = s_measure_rpm_avg(fc,
+                                                      FAN_LEARN_STEP_MEASURE_SEC);
+
+                if (meas_rpm >= (uint16_t)FAN_FAULT_RPM_MIN)
+                {
+                    if (s_fault_hits < 255U) { s_fault_hits++; }
+                    FAN_LOG("Monitor off-mode (no profile): rpm=%u (hit %u/%u)\r\n",
+                            (unsigned)meas_rpm,
+                            (unsigned)s_fault_hits,
+                            (unsigned)FAN_LEARN_FAULT_CONFIRM_COUNT);
+
+                    if (s_fault_hits >= FAN_LEARN_FAULT_CONFIRM_COUNT)
+                    {
+                        s_enter_learn_fault(fc, meas_rpm, 0U, 0U);
+                        s_fault_hits = 0U;
+                    }
+                }
+                else
+                {
+                    s_fault_hits = 0U;
                 }
             }
             else if (!s_profile_valid(learned, cur_duty))

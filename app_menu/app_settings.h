@@ -34,7 +34,7 @@ extern "C" {
 #define APP_SETTINGS_FLASH_ADDR   0x0800F800UL
 
 #define APP_SETTINGS_MAGIC        0xCA5E1A2BUL  /**< Giá trị nhận dạng hợp lệ */
-#define APP_SETTINGS_VERSION      10U           /**< v10: fan_learned_rpm (RPM), migrate từ v9 */
+#define APP_SETTINGS_VERSION      11U           /**< v11: servo_cal; v10: fan_learned_rpm */
 
 /* =========================================================================
  * API

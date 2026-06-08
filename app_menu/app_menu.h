@@ -14,7 +14,8 @@
  *    ├─ Cai dat t/gian  -> SCREEN_TIME_MENU -> SCREEN_TIME_EDIT
  *    ├─ Cai dat MinMax  -> SCREEN_MINMAX_MODE -> PARAM -> FIELD -> EDIT
  *    ├─ Vi tri DS18B20  -> SCREEN_DS18B20_POS
- *    └─ Hoc toc do quat -> SCREEN_FAN_LEARN_MENU -> SCREEN_FAN_LEARN_RUN
+ *    ├─ Hoc toc do quat -> SCREEN_FAN_LEARN_MENU -> SCREEN_FAN_LEARN_RUN
+ *    └─ Hoc goc servo  -> SERVO_LEARN_MENU -> SERVO_LEARN_SIDE -> SERVO_LEARN_EDIT
  */
 
 #ifndef APP_MENU_H_
@@ -64,6 +65,9 @@ typedef enum
     SCREEN_DS18B20_LEARN,  /**< Học vị trí DS18B20 (hiển thị tiến trình)    */
     SCREEN_FAN_LEARN_MENU, /**< Sub-menu học tốc độ quạt (Hoc / Thoat)      */
     SCREEN_FAN_LEARN_RUN,  /**< Đang học tốc độ quạt (hiển thị tiến trình) */
+    SCREEN_SERVO_LEARN_MENU, /**< Chọn Servo 1 / Servo 2                    */
+    SCREEN_SERVO_LEARN_SIDE, /**< Chọn góc đóng / góc mở                    */
+    SCREEN_SERVO_LEARN_EDIT, /**< Chỉnh góc + quay servo thử                */
     SCREEN_COUNT
 } app_screen_t;
 
@@ -140,8 +144,8 @@ typedef struct
     uint8_t        toc_do_quat;
     uint8_t        _pad2;
     uint16_t thanh_trung_initial_minutes;
-    uint8_t  sg90_mo_to_deg;
-    uint8_t  sg90_mo_nho_deg;
+    uint8_t  sg90_mo_to_pct;   /**< % mở to (0=đóng/MIN, 100=mở/MAX) */
+    uint8_t  sg90_mo_nho_pct;  /**< % mở nhỏ */
 } mode_settings_t;
 
 /** @brief Cài đặt thời gian thực */
@@ -224,6 +228,14 @@ struct app_menu_ctx_s
 
     /* --- Quạt: trạng thái chia sẻ với fan_lib --- */
     fan_state_t      fan;  /**< Học RPM + cảnh báo + an toàn; truy cập qua MutexMenuHandle */
+
+    /* --- Học góc servo SG90 --- */
+    output_servo_cal_t servo_cal;
+    volatile uint8_t   servo_learn_active;
+    uint8_t            servo_learn_servo;   /**< 0=servo1, 1=servo2 */
+    uint8_t            servo_learn_side;    /**< 0=đóng, 1=mở */
+    volatile uint8_t   servo_learn_angle_deg;
+    uint8_t            servo_learn_saved_deg;
 
 };
 

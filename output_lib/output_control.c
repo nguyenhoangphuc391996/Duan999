@@ -45,7 +45,7 @@ static void output_ctrl_enter_normal(output_ctrl_state_t *st,
 	}
 }
 
-/** Chỉ chạy quạt (theo % cài đặt, 0% = tắt); tắt sưởi, đèn, ẩm, SG90 về 0°. */
+/** Chỉ chạy quạt (theo % cài đặt, 0% = tắt); tắt sưởi, đèn, ẩm, SG90 về MIN (đóng). */
 static void output_ctrl_warmup_only(output_t *h, const output_ctrl_snapshot_t *s)
 {
 	uint8_t fan_pct;
@@ -53,8 +53,8 @@ static void output_ctrl_warmup_only(output_t *h, const output_ctrl_snapshot_t *s
 	output_heater_set(h, false);
 	output_mist_set(h, false);
 	output_lamp_set(h, false);
-	output_servo1_set_angle(h, 0U);
-	output_servo2_set_angle(h, 0U);
+	output_servo1_set_angle(h, output_servo_close_deg(h, 0U));
+	output_servo2_set_angle(h, output_servo_close_deg(h, 1U));
 
 	if (s->fan_learn_active)
 	{
@@ -177,8 +177,8 @@ void output_ctrl_snapshot_take(output_ctrl_snapshot_t *s,
 		}
 
 		s->thanh_trung_initial_minutes = cfg->thanh_trung_initial_minutes;
-		s->sg90_mo_to_deg = cfg->sg90_mo_to_deg;
-		s->sg90_mo_nho_deg = cfg->sg90_mo_nho_deg;
+		s->sg90_mo_to_pct = cfg->sg90_mo_to_pct;
+		s->sg90_mo_nho_pct = cfg->sg90_mo_nho_pct;
 	}
 
 	s->scd41_fault          = menu->scd41_fault;
@@ -190,6 +190,10 @@ void output_ctrl_snapshot_take(output_ctrl_snapshot_t *s,
 	s->fan_force_off        = (menu->fan.force_off != 0U);
 	s->now_h = menu->time_cfg.hour;
 	s->now_m = menu->time_cfg.minute;
+	s->servo_cal = menu->servo_cal;
+	s->servo_learn_active = (menu->servo_learn_active != 0U);
+	s->servo_learn_servo = menu->servo_learn_servo;
+	s->servo_learn_angle_deg = menu->servo_learn_angle_deg;
 	osMutexRelease(menu_mutex);
 }
 
@@ -201,6 +205,15 @@ bool output_ctrl_apply(output_t *h,
 	if ((h == NULL) || (st == NULL) || (s == NULL))
 	{
 		return false;
+	}
+
+	output_servo_apply_cal(h, &s->servo_cal);
+
+	if (s->servo_learn_active)
+	{
+		uint8_t servo_num = (uint8_t)(s->servo_learn_servo + 1U);
+		output_servo_set_angle_live(h, servo_num, s->servo_learn_angle_deg);
+		return true;
 	}
 
 	/* ---- Lỗi sensor / quạt: tắt toàn bộ đầu ra ---- */
@@ -274,25 +287,30 @@ bool output_ctrl_apply(output_t *h,
 		output_mist_set(h, false);
 		output_lamp_set(h, false);
 		output_fan_set_percent(h, 0U);
-		output_servo2_set_angle(h, 0U);
+		output_servo2_set_angle(h, output_servo_close_deg(h, 1U));
 
 		{
 			uint32_t elapsed_ms = now_tick - st->thanh_trung_start_tick;
 			uint32_t initial_ms = (uint32_t)s->thanh_trung_initial_minutes * 60U * 1000U;
+			uint8_t angle_to;
+			uint8_t angle_nho;
+
+			angle_to = output_servo_angle_from_percent(h, 0U, s->sg90_mo_to_pct);
+			angle_nho = output_servo_angle_from_percent(h, 0U, s->sg90_mo_nho_pct);
 
 			if (elapsed_ms < initial_ms)
 			{
-				output_servo1_set_angle(h, s->sg90_mo_to_deg);
+				output_servo1_set_angle(h, angle_to);
 			}
 			else if (s->valid_temp)
 			{
 				if (s->temp_c > s->temp_max)
 				{
-					output_servo1_set_angle(h, s->sg90_mo_to_deg);
+					output_servo1_set_angle(h, angle_to);
 				}
 				else if (s->temp_c < s->temp_min)
 				{
-					output_servo1_set_angle(h, s->sg90_mo_nho_deg);
+					output_servo1_set_angle(h, angle_nho);
 				}
 			}
 		}
@@ -331,13 +349,13 @@ bool output_ctrl_apply(output_t *h,
 	{
 		if (s->co2_ppm > (uint16_t)s->co2_max)
 		{
-			output_servo1_set_angle(h, 180U);
-			output_servo2_set_angle(h, 180U);
+			output_servo1_set_angle(h, output_servo_open_deg(h, 0U));
+			output_servo2_set_angle(h, output_servo_open_deg(h, 1U));
 		}
 		else if (s->co2_ppm < (uint16_t)s->co2_min)
 		{
-			output_servo1_set_angle(h, 0U);
-			output_servo2_set_angle(h, 0U);
+			output_servo1_set_angle(h, output_servo_close_deg(h, 0U));
+			output_servo2_set_angle(h, output_servo_close_deg(h, 1U));
 		}
 	}
 

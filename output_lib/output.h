@@ -33,9 +33,33 @@ extern "C" {
  * - PB15            : phun sương
  */
 
-/** Góc servo tối thiểu / tối đa (độ). */
-#define OUTPUT_SERVO_ANGLE_MIN_DEG      ((uint8_t)0U)
-#define OUTPUT_SERVO_ANGLE_MAX_DEG      ((uint8_t)180U)
+/**
+ * Góc servo đóng / mở (độ, thường 0..180).
+ *
+ * MIN_DEG = đóng, ánh xạ OUTPUT_SERVO_PULSE_MIN_TICKS (~1 ms).
+ * MAX_DEG = mở,   ánh xạ OUTPUT_SERVO_PULSE_MAX_TICKS (~2 ms).
+ *
+ * MIN < MAX (vd. 60 → 120): đóng→mở quay tăng góc.
+ * MIN > MAX (vd. 120 → 60): đóng→mở quay giảm góc / lắp ngược.
+ *
+ * Mọi điều khiển (Nghỉ, CO₂, warmup, Thanh trùng) dùng hai macro này.
+ * Thanh trùng: cài % mở (0% = MIN, 100% = MAX) qua @ref output_servo_angle_from_percent.
+ *
+ * Chỉnh góc: sửa OUTPUT_SERVO_ANGLE_*_DEG_CFG bên dưới (số nguyên, không cast).
+ */
+/** Góc đóng / mở (độ) — giá trị cấu hình cho preprocessor. */
+#define OUTPUT_SERVO_ANGLE_MIN_DEG_CFG  30
+#define OUTPUT_SERVO_ANGLE_MAX_DEG_CFG  90
+
+#if (OUTPUT_SERVO_ANGLE_MIN_DEG_CFG == OUTPUT_SERVO_ANGLE_MAX_DEG_CFG)
+#error OUTPUT_SERVO_ANGLE_MIN_DEG_CFG and OUTPUT_SERVO_ANGLE_MAX_DEG_CFG must differ
+#endif
+
+#define OUTPUT_SERVO_ANGLE_MIN_DEG      ((uint8_t)OUTPUT_SERVO_ANGLE_MIN_DEG_CFG)
+#define OUTPUT_SERVO_ANGLE_MAX_DEG      ((uint8_t)OUTPUT_SERVO_ANGLE_MAX_DEG_CFG)
+
+/** Thời gian quay đều từ 0% (MIN) đến 100% (MAX), tránh sốc cơ khí. */
+#define OUTPUT_SERVO_RAMP_FULL_MS       (5000U)
 
 /**
  * Xung servo mặc định (đơn vị tick TIM), tương ứng TIM1 50 Hz, chu kỳ 20000.
@@ -97,6 +121,15 @@ typedef struct
 	int16_t value;
 } output_cmd_t;
 
+/** Góc đóng/mở đã học cho từng servo (lưu Flash). */
+typedef struct
+{
+	uint8_t servo1_close_deg;
+	uint8_t servo1_open_deg;
+	uint8_t servo2_close_deg;
+	uint8_t servo2_open_deg;
+} output_servo_cal_t;
+
 /**
  * @brief Handle điều khiển toàn bộ đầu ra.
  *
@@ -128,6 +161,15 @@ typedef struct
 	uint8_t fan_percent;
 	uint8_t servo1_angle_deg;
 	uint8_t servo2_angle_deg;
+	int16_t servo1_permille;
+	int16_t servo2_permille;
+	int16_t servo1_target_permille;
+	int16_t servo2_target_permille;
+	uint32_t servo_ramp_last_tick;
+	uint8_t servo1_close_deg;
+	uint8_t servo1_open_deg;
+	uint8_t servo2_close_deg;
+	uint8_t servo2_open_deg;
 	bool heater_on;
 	bool lamp_on;
 	bool mist_on;
@@ -145,7 +187,7 @@ void output_defaults(output_t *h);
  */
 bool output_init(output_t *h);
 
-/** Tắt toàn bộ đầu ra (GPIO + PWM 0 / servo 0°). */
+/** Tắt toàn bộ đầu ra (GPIO + PWM 0 / servo về OUTPUT_SERVO_ANGLE_MIN_DEG). */
 void output_all_off(output_t *h);
 
 /* --- GPIO: điện trở, đèn, phun sương --- */
@@ -161,7 +203,15 @@ bool output_mist_get(const output_t *h);
 void output_fan_set_percent(output_t *h, uint8_t percent);
 uint8_t output_fan_get_percent(const output_t *h);
 
-/* --- Servo: góc 0..180° hoặc xung tick TIM --- */
+/* --- Servo: góc (đóng/mở đã học) hoặc xung tick TIM --- */
+void output_servo_apply_cal(output_t *h, const output_servo_cal_t *cal);
+uint8_t output_servo_close_deg(const output_t *h, uint8_t servo_idx);
+uint8_t output_servo_open_deg(const output_t *h, uint8_t servo_idx);
+/** @brief servo_idx 0=servo1, 1=servo2; 0%=đóng, 100%=mở. */
+uint8_t output_servo_angle_from_percent(const output_t *h, uint8_t servo_idx, uint8_t percent);
+/** @brief servo_num 1 hoặc 2 — áp góc ngay (học góc, bỏ qua ramp). */
+void output_servo_set_angle_live(output_t *h, uint8_t servo_num, uint8_t angle_deg);
+
 void output_servo1_set_angle(output_t *h, uint8_t angle_deg);
 void output_servo2_set_angle(output_t *h, uint8_t angle_deg);
 void output_servo1_set_pulse_ticks(output_t *h, uint16_t pulse_ticks);
@@ -169,6 +219,12 @@ void output_servo2_set_pulse_ticks(output_t *h, uint16_t pulse_ticks);
 
 uint8_t output_servo1_get_angle(const output_t *h);
 uint8_t output_servo2_get_angle(const output_t *h);
+
+/**
+ * @brief Tiến ramp servo về góc đích (gọi định kỳ từ task output, ~20 ms).
+ * @param now_tick @ref osKernelGetTickCount
+ */
+void output_servo_ramp_update(output_t *h, uint32_t now_tick);
 
 /**
  * @brief Áp dụng 1 lệnh output (dùng cho queue/task output).

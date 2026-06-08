@@ -62,8 +62,12 @@ typedef struct
 	uint8_t now_h;
 	uint8_t now_m;
 	uint16_t thanh_trung_initial_minutes;
-	uint8_t sg90_mo_to_deg;
-	uint8_t sg90_mo_nho_deg;
+	uint8_t sg90_mo_to_pct;
+	uint8_t sg90_mo_nho_pct;
+	output_servo_cal_t servo_cal;
+	bool servo_learn_active;
+	uint8_t servo_learn_servo;
+	uint8_t servo_learn_angle_deg;
 } output_ctrl_snapshot_t;
 
 /** @brief Trạng thái nội bộ vòng điều khiển (thanh trùng, warmup, lỗi). */

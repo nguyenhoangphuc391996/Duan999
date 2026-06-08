@@ -56,28 +56,28 @@ extern "C" {
 /** < 100 RPM liên tục N giây → kích hoạt lỗi cơ học. */
 #define FAN_LOW_SPEED_FAULT_SEC       2U
 /** Ngưỡng sai số so với RPM đã học (±%). */
-#define FAN_LEARN_TOLERANCE_PERCENT   25U
+#define FAN_LEARN_TOLERANCE_PERCENT   15U
 /** Sàn sai số tuyệt đối (RPM) – tránh báo nhầm do lượng tử hoá TACH. */
 #define FAN_LEARN_TOLERANCE_RPM_MIN   60U
 /** Chu kỳ lặp giám sát profile khi duty/chế độ đã ổn định (ms). */
 #define FAN_MONITOR_INTERVAL_MS       3000U
 /** Số lần liên tiếp lệch ngưỡng trước khi kích hoạt lỗi. */
-#define FAN_LEARN_FAULT_CONFIRM_COUNT 5U
+#define FAN_LEARN_FAULT_CONFIRM_COUNT 3U
 /** Xung TACH tối đa/giây để coi quạt đã dừng hẳn (1 xung ≈ nhiễu). */
 #define FAN_COAST_STOP_MAX_PPS        1U
 /** Số giây liên tục "dừng" để xác nhận hết quán tính. */
 #define FAN_COAST_STOP_CONFIRM_SEC    2U
 /** Hết thời gian chờ dừng thì bắt đầu học dù chưa xác nhận (ms). */
-#define FAN_COAST_STOP_TIMEOUT_MS     30000U
+#define FAN_COAST_STOP_TIMEOUT_MS     15000U
 
 /** Chờ PWM ổn định (giây) – học: một lần trước các lần đo; giám sát: sau đổi duty/chế độ. */
-#define FAN_LEARN_STEP_SETTLE_SEC     5U
+#define FAN_LEARN_STEP_SETTLE_SEC     4U
 /** Số giây đo RPM mỗi lần (trung bình 1 mẫu/giây) – dùng chung học và giám sát. */
-#define FAN_LEARN_STEP_MEASURE_SEC    3U
+#define FAN_LEARN_STEP_MEASURE_SEC    2U
 /** Số lần đo liên tiếp khi học (sau settle) → trung bình các lần đo. */
-#define FAN_LEARN_STEP_REPEAT_COUNT   5U
+#define FAN_LEARN_STEP_REPEAT_COUNT   2U
 /** Chờ thêm (giây) sau khi xong một bước học rồi mới đổi sang % PWM tiếp theo. */
-#define FAN_LEARN_STEP_GAP_SEC        2U
+#define FAN_LEARN_STEP_GAP_SEC        1U
 
 /* =========================================================================
  * Fan state – nhúng vào app_menu_ctx_t, truy cập qua mutex

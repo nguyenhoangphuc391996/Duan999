@@ -1148,17 +1148,39 @@ void StartTaskOutput(void *argument)
 
   for (;;)
   {
+    uint32_t now_tick = osKernelGetTickCount();
+
     if (osMessageQueueGet(QueueOutputHandle, &cmd, NULL, 20U) == osOK)
     {
       (void)output_apply_cmd(&g_output, &cmd);
     }
 
-    if ((osKernelGetTickCount() - control_last_tick) >= 200U)
     {
-      control_last_tick = osKernelGetTickCount();
+      bool servo_learn_active = false;
+
+      osMutexAcquire(MutexMenuHandle, osWaitForever);
+      output_servo_apply_cal(&g_output, &g_menu_ctx.servo_cal);
+      servo_learn_active = (g_menu_ctx.servo_learn_active != 0U);
+      if (servo_learn_active)
+      {
+        output_servo_set_angle_live(&g_output,
+                                    (uint8_t)(g_menu_ctx.servo_learn_servo + 1U),
+                                    g_menu_ctx.servo_learn_angle_deg);
+      }
+      osMutexRelease(MutexMenuHandle);
+
+      if (!servo_learn_active)
+      {
+        output_servo_ramp_update(&g_output, now_tick);
+      }
+    }
+
+    if ((now_tick - control_last_tick) >= 200U)
+    {
+      control_last_tick = now_tick;
       output_ctrl_snapshot_take(&snap, &g_menu_ctx, MutexMenuHandle);
 
-      (void)output_ctrl_apply(&g_output, &ctrl, &snap, osKernelGetTickCount());
+      (void)output_ctrl_apply(&g_output, &ctrl, &snap, now_tick);
     }
     ramduoutput = uxTaskGetStackHighWaterMark(NULL);
   }
