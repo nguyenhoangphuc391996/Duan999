@@ -1136,6 +1136,8 @@ void StartTaskOutput(void *argument)
   output_ctrl_state_t ctrl;
   uint32_t control_last_tick = osKernelGetTickCount();
 
+  static bool servo_learn_was_active = false;
+
   output_ctrl_state_init(&ctrl);
   output_defaults(&g_output);
   g_output.fan.htim = &htim2;
@@ -1163,11 +1165,17 @@ void StartTaskOutput(void *argument)
       servo_learn_active = (g_menu_ctx.servo_learn_active != 0U);
       if (servo_learn_active)
       {
-        output_servo_set_angle_live(&g_output,
-                                    (uint8_t)(g_menu_ctx.servo_learn_servo + 1U),
-                                    g_menu_ctx.servo_learn_angle_deg);
+        output_servo_set_learn_preview(&g_output,
+                                       (uint8_t)(g_menu_ctx.servo_learn_servo + 1U),
+                                       g_menu_ctx.servo_learn_angle_deg);
       }
       osMutexRelease(MutexMenuHandle);
+
+      if (servo_learn_was_active && !servo_learn_active)
+      {
+        output_servo_resync_all(&g_output);
+      }
+      servo_learn_was_active = servo_learn_active;
 
       if (!servo_learn_active)
       {

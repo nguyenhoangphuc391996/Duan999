@@ -212,7 +212,7 @@ bool output_ctrl_apply(output_t *h,
 	if (s->servo_learn_active)
 	{
 		uint8_t servo_num = (uint8_t)(s->servo_learn_servo + 1U);
-		output_servo_set_angle_live(h, servo_num, s->servo_learn_angle_deg);
+		output_servo_set_learn_preview(h, servo_num, s->servo_learn_angle_deg);
 		return true;
 	}
 

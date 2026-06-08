@@ -36,8 +36,9 @@ extern "C" {
 /**
  * Góc servo đóng / mở (độ, thường 0..180).
  *
- * MIN_DEG = đóng, ánh xạ OUTPUT_SERVO_PULSE_MIN_TICKS (~1 ms).
- * MAX_DEG = mở,   ánh xạ OUTPUT_SERVO_PULSE_MAX_TICKS (~2 ms).
+ * Góc đóng/mở đã học (servo_cal) là góc tuyệt đối 0..180 (cùng số trên LCD lúc học).
+ * Xung PWM luôn map 0°→PULSE_MIN, 180°→PULSE_MAX; đóng/mở chỉ định nghĩa
+ * vị trí logic (%, CO₂), không đổi công thức xung.
  *
  * MIN < MAX (vd. 60 → 120): đóng→mở quay tăng góc.
  * MIN > MAX (vd. 120 → 60): đóng→mở quay giảm góc / lắp ngược.
@@ -48,8 +49,8 @@ extern "C" {
  * Chỉnh góc: sửa OUTPUT_SERVO_ANGLE_*_DEG_CFG bên dưới (số nguyên, không cast).
  */
 /** Góc đóng / mở (độ) — giá trị cấu hình cho preprocessor. */
-#define OUTPUT_SERVO_ANGLE_MIN_DEG_CFG  30
-#define OUTPUT_SERVO_ANGLE_MAX_DEG_CFG  90
+#define OUTPUT_SERVO_ANGLE_MIN_DEG_CFG  40
+#define OUTPUT_SERVO_ANGLE_MAX_DEG_CFG  50
 
 #if (OUTPUT_SERVO_ANGLE_MIN_DEG_CFG == OUTPUT_SERVO_ANGLE_MAX_DEG_CFG)
 #error OUTPUT_SERVO_ANGLE_MIN_DEG_CFG and OUTPUT_SERVO_ANGLE_MAX_DEG_CFG must differ
@@ -57,6 +58,13 @@ extern "C" {
 
 #define OUTPUT_SERVO_ANGLE_MIN_DEG      ((uint8_t)OUTPUT_SERVO_ANGLE_MIN_DEG_CFG)
 #define OUTPUT_SERVO_ANGLE_MAX_DEG      ((uint8_t)OUTPUT_SERVO_ANGLE_MAX_DEG_CFG)
+
+/**
+ * Dải góc chuẩn SG90 khi học trên menu (0..180 → ~1..2 ms).
+ * Không dùng góc đóng/mở đã lưu — tránh servo chỉ nhảy 2 cực.
+ */
+#define OUTPUT_SERVO_LEARN_RAW_CLOSE_DEG  ((uint8_t)0U)
+#define OUTPUT_SERVO_LEARN_RAW_OPEN_DEG   ((uint8_t)180U)
 
 /** Thời gian quay đều từ 0% (MIN) đến 100% (MAX), tránh sốc cơ khí. */
 #define OUTPUT_SERVO_RAMP_FULL_MS       (5000U)
@@ -209,8 +217,12 @@ uint8_t output_servo_close_deg(const output_t *h, uint8_t servo_idx);
 uint8_t output_servo_open_deg(const output_t *h, uint8_t servo_idx);
 /** @brief servo_idx 0=servo1, 1=servo2; 0%=đóng, 100%=mở. */
 uint8_t output_servo_angle_from_percent(const output_t *h, uint8_t servo_idx, uint8_t percent);
-/** @brief servo_num 1 hoặc 2 — áp góc ngay (học góc, bỏ qua ramp). */
+/** @brief servo_num 1 hoặc 2 — áp góc ngay theo cal đóng/mở (bỏ qua ramp). */
 void output_servo_set_angle_live(output_t *h, uint8_t servo_num, uint8_t angle_deg);
+/** @brief Xem trước khi học: LCD 0..180 map thẳng xung SG90, không clamp cal. */
+void output_servo_set_learn_preview(output_t *h, uint8_t servo_num, uint8_t angle_deg);
+/** @brief Đồng bộ permille ramp từ xung PWM hiện tại (gọi khi thoát học góc). */
+void output_servo_resync_all(output_t *h);
 
 void output_servo1_set_angle(output_t *h, uint8_t angle_deg);
 void output_servo2_set_angle(output_t *h, uint8_t angle_deg);

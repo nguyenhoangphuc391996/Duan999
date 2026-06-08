@@ -45,8 +45,9 @@ static uint8_t output_clamp_servo_ep(uint8_t close_deg, uint8_t open_deg, uint8_
 }
 
 static void output_pwm_set_compare(output_pwm_ch_t *ch, uint16_t pulse_ticks);
-static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t close_deg,
-                                            uint8_t open_deg, uint8_t angle_deg);
+/** Góc tuyệt đối 0..180 (cùng thang LCD khi học) → xung PWM. */
+static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t angle_deg);
+static uint8_t output_pulse_to_angle_deg(const output_t *h, uint16_t pulse_ticks);
 
 static uint8_t output_servo_close_ep(const output_t *h, uint8_t servo_idx)
 {
@@ -176,7 +177,7 @@ static void output_servo_apply_permille(output_t *h, uint8_t servo_idx,
 	open_deg  = output_servo_open_ep(h, servo_idx);
 	angle = output_permille_to_angle(close_deg, open_deg, permille);
 	*angle_deg = angle;
-	pulse = output_angle_to_pulse_ticks(h, close_deg, open_deg, angle);
+	pulse = output_angle_to_pulse_ticks(h, angle);
 	output_pwm_set_compare(ch, pulse);
 }
 
@@ -358,15 +359,18 @@ static bool output_pwm_start(output_pwm_ch_t *ch)
 	return (HAL_TIM_PWM_Start(ch->htim, ch->channel) == HAL_OK);
 }
 
-static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t close_deg,
-                                            uint8_t open_deg, uint8_t angle_deg)
+static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t angle_deg)
 {
 	uint16_t pmin;
 	uint16_t pmax;
 	int32_t span_deg;
 	int32_t pulse;
 
-	angle_deg = output_clamp_servo_ep(close_deg, open_deg, angle_deg);
+	if (angle_deg > OUTPUT_SERVO_LEARN_RAW_OPEN_DEG)
+	{
+		angle_deg = OUTPUT_SERVO_LEARN_RAW_OPEN_DEG;
+	}
+
 	pmin = output_servo_pulse_min(h);
 	pmax = output_servo_pulse_max(h);
 	if (pmax <= pmin)
@@ -374,7 +378,8 @@ static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t close_deg
 		return pmin;
 	}
 
-	span_deg = (int32_t)open_deg - (int32_t)close_deg;
+	span_deg = (int32_t)OUTPUT_SERVO_LEARN_RAW_OPEN_DEG
+	           - (int32_t)OUTPUT_SERVO_LEARN_RAW_CLOSE_DEG;
 	if (span_deg == 0)
 	{
 		return pmin;
@@ -382,7 +387,7 @@ static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t close_deg
 
 	pulse = (int32_t)pmin
 	        + ((int32_t)(pmax - pmin)
-	           * ((int32_t)angle_deg - (int32_t)close_deg))
+	           * ((int32_t)angle_deg - (int32_t)OUTPUT_SERVO_LEARN_RAW_CLOSE_DEG))
 	          / span_deg;
 	if (pulse < (int32_t)pmin)
 	{
@@ -395,8 +400,7 @@ static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t close_deg
 	return (uint16_t)pulse;
 }
 
-static uint8_t output_pulse_to_angle_deg(const output_t *h, uint8_t close_deg,
-                                         uint8_t open_deg, uint16_t pulse_ticks)
+static uint8_t output_pulse_to_angle_deg(const output_t *h, uint16_t pulse_ticks)
 {
 	uint16_t pmin;
 	uint16_t pmax;
@@ -408,27 +412,36 @@ static uint8_t output_pulse_to_angle_deg(const output_t *h, uint8_t close_deg,
 	pmax = output_servo_pulse_max(h);
 	if (pmax <= pmin)
 	{
-		return close_deg;
+		return OUTPUT_SERVO_LEARN_RAW_CLOSE_DEG;
 	}
 	if (pulse_ticks <= pmin)
 	{
-		return close_deg;
+		return OUTPUT_SERVO_LEARN_RAW_CLOSE_DEG;
 	}
 	if (pulse_ticks >= pmax)
 	{
-		return open_deg;
+		return OUTPUT_SERVO_LEARN_RAW_OPEN_DEG;
 	}
 
-	span_deg = (int32_t)open_deg - (int32_t)close_deg;
+	span_deg = (int32_t)OUTPUT_SERVO_LEARN_RAW_OPEN_DEG
+	           - (int32_t)OUTPUT_SERVO_LEARN_RAW_CLOSE_DEG;
 	span_pulse = (int32_t)pmax - (int32_t)pmin;
 	if ((span_deg == 0) || (span_pulse == 0))
 	{
-		return close_deg;
+		return OUTPUT_SERVO_LEARN_RAW_CLOSE_DEG;
 	}
 
-	angle = (int32_t)close_deg
+	angle = (int32_t)OUTPUT_SERVO_LEARN_RAW_CLOSE_DEG
 	        + (span_deg * ((int32_t)pulse_ticks - (int32_t)pmin)) / span_pulse;
-	return output_clamp_servo_ep(close_deg, open_deg, (uint8_t)angle);
+	if (angle < 0)
+	{
+		angle = 0;
+	}
+	if (angle > (int32_t)OUTPUT_SERVO_LEARN_RAW_OPEN_DEG)
+	{
+		angle = (int32_t)OUTPUT_SERVO_LEARN_RAW_OPEN_DEG;
+	}
+	return (uint8_t)angle;
 }
 
 static uint16_t output_clamp_servo_pulse(const output_t *h, uint16_t pulse_ticks)
@@ -684,6 +697,91 @@ void output_servo_set_angle_live(output_t *h, uint8_t servo_num, uint8_t angle_d
 	}
 }
 
+void output_servo_set_learn_preview(output_t *h, uint8_t servo_num, uint8_t angle_deg)
+{
+	uint16_t pulse;
+
+	if (h == NULL)
+	{
+		return;
+	}
+
+	if (angle_deg > OUTPUT_SERVO_LEARN_RAW_OPEN_DEG)
+	{
+		angle_deg = OUTPUT_SERVO_LEARN_RAW_OPEN_DEG;
+	}
+
+	pulse = output_angle_to_pulse_ticks(h, angle_deg);
+
+	if (servo_num == 1U)
+	{
+		h->servo1_angle_deg = angle_deg;
+		output_pwm_set_compare(&h->servo1, pulse);
+	}
+	else if (servo_num == 2U)
+	{
+		h->servo2_angle_deg = angle_deg;
+		output_pwm_set_compare(&h->servo2, pulse);
+	}
+}
+
+static void output_servo_resync_channel(output_t *h, uint8_t servo_idx)
+{
+	uint16_t pulse;
+	uint8_t close_deg;
+	uint8_t open_deg;
+	uint8_t raw_angle;
+	uint8_t cal_angle;
+	int16_t permille;
+	output_pwm_ch_t *ch;
+	int16_t *permille_cur;
+	int16_t *permille_tgt;
+	uint8_t *angle_deg;
+
+	if ((h == NULL) || !h->initialized)
+	{
+		return;
+	}
+
+	if (servo_idx == 0U)
+	{
+		ch = &h->servo1;
+		close_deg = h->servo1_close_deg;
+		open_deg = h->servo1_open_deg;
+		permille_cur = &h->servo1_permille;
+		permille_tgt = &h->servo1_target_permille;
+		angle_deg = &h->servo1_angle_deg;
+	}
+	else
+	{
+		ch = &h->servo2;
+		close_deg = h->servo2_close_deg;
+		open_deg = h->servo2_open_deg;
+		permille_cur = &h->servo2_permille;
+		permille_tgt = &h->servo2_target_permille;
+		angle_deg = &h->servo2_angle_deg;
+	}
+
+	if ((ch->htim == NULL) || (ch->htim->Instance == NULL))
+	{
+		return;
+	}
+
+	pulse = (uint16_t)__HAL_TIM_GET_COMPARE(ch->htim, ch->channel);
+	raw_angle = output_pulse_to_angle_deg(h, pulse);
+	cal_angle = output_clamp_servo_ep(close_deg, open_deg, raw_angle);
+	permille = output_servo_angle_to_permille(close_deg, open_deg, cal_angle);
+	*permille_cur = permille;
+	*permille_tgt = permille;
+	*angle_deg = cal_angle;
+}
+
+void output_servo_resync_all(output_t *h)
+{
+	output_servo_resync_channel(h, 0U);
+	output_servo_resync_channel(h, 1U);
+}
+
 void output_servo1_set_angle(output_t *h, uint8_t angle_deg)
 {
 	if (h == NULL)
@@ -718,8 +816,7 @@ void output_servo1_set_pulse_ticks(output_t *h, uint16_t pulse_ticks)
 	}
 
 	pulse_ticks = output_clamp_servo_pulse(h, pulse_ticks);
-	angle_deg = output_pulse_to_angle_deg(h, h->servo1_close_deg, h->servo1_open_deg,
-	                                      pulse_ticks);
+	angle_deg = output_pulse_to_angle_deg(h, pulse_ticks);
 	output_servo_set_target_permille(&h->servo1_target_permille,
 	                                 h->servo1_close_deg, h->servo1_open_deg,
 	                                 angle_deg);
@@ -735,8 +832,7 @@ void output_servo2_set_pulse_ticks(output_t *h, uint16_t pulse_ticks)
 	}
 
 	pulse_ticks = output_clamp_servo_pulse(h, pulse_ticks);
-	angle_deg = output_pulse_to_angle_deg(h, h->servo2_close_deg, h->servo2_open_deg,
-	                                      pulse_ticks);
+	angle_deg = output_pulse_to_angle_deg(h, pulse_ticks);
 	output_servo_set_target_permille(&h->servo2_target_permille,
 	                                 h->servo2_close_deg, h->servo2_open_deg,
 	                                 angle_deg);
