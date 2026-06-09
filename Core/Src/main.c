@@ -68,42 +68,49 @@ UART_HandleTypeDef huart1;
 osThreadId_t TaskInputHandle;
 const osThreadAttr_t TaskInput_attributes = {
   .name = "TaskInput",
-  .stack_size = 500 * 4,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskUI */
 osThreadId_t TaskUIHandle;
 const osThreadAttr_t TaskUI_attributes = {
   .name = "TaskUI",
-  .stack_size = 500 * 4,
+  .stack_size = 146 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskLCD */
 osThreadId_t TaskLCDHandle;
 const osThreadAttr_t TaskLCD_attributes = {
   .name = "TaskLCD",
-  .stack_size = 300 * 4,
+  .stack_size = 212 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskDS18B20 */
 osThreadId_t TaskDS18B20Handle;
 const osThreadAttr_t TaskDS18B20_attributes = {
   .name = "TaskDS18B20",
-  .stack_size = 500 * 4,
+  .stack_size = 228 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskOutput */
 osThreadId_t TaskOutputHandle;
 const osThreadAttr_t TaskOutput_attributes = {
   .name = "TaskOutput",
-  .stack_size = 200 * 4,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskFanLearn */
 osThreadId_t TaskFanLearnHandle;
 const osThreadAttr_t TaskFanLearn_attributes = {
   .name = "TaskFanLearn",
-  .stack_size = 300 * 4,
+  .stack_size = 156 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for TaskSCD41 */
+osThreadId_t TaskSCD41Handle;
+const osThreadAttr_t TaskSCD41_attributes = {
+  .name = "TaskSCD41",
+  .stack_size = 136 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for QueueEC11 */
@@ -157,7 +164,7 @@ static fan_ctx_t      g_fan_ctx;
 /* Bộ đếm xung TACH (PB4 / TIM3_CH1): tăng trong HAL_TIM_IC_CaptureCallback */
 static volatile uint32_t g_tach_pulse_count = 0U;
 
-uint32_t ramduinput, ramduui, ramdulcd, ramduds18b20, ramduoutput, ramdufanlearn;
+uint32_t ramduinput, ramduui, ramdulcd, ramduds18b20, ramduoutput, ramdufanlearn, ramduscd41;
 uint32_t free_heap __attribute__((unused));
 /* USER CODE END PV */
 
@@ -177,6 +184,7 @@ void StartTaskLCD(void *argument);
 void StartTaskDS18B20(void *argument);
 void StartTaskOutput(void *argument);
 void StartTaskFanLearn(void *argument);
+void StartTaskSCD41(void *argument);
 
 /* USER CODE BEGIN PFP */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
@@ -276,7 +284,7 @@ int main(void)
 
   /* Create the queue(s) */
   /* creation of QueueEC11 */
-  QueueEC11Handle = osMessageQueueNew (16, sizeof(rtrecd_queue_item_t), &QueueEC11_attributes);
+  QueueEC11Handle = osMessageQueueNew (20, sizeof(rtrecd_queue_item_t), &QueueEC11_attributes);
 
   /* creation of QueueSCD41 */
   QueueSCD41Handle = osMessageQueueNew (16, sizeof(scd41_queue_item_t), &QueueSCD41_attributes);
@@ -309,6 +317,9 @@ int main(void)
 
   /* creation of TaskFanLearn */
   TaskFanLearnHandle = osThreadNew(StartTaskFanLearn, NULL, &TaskFanLearn_attributes);
+
+  /* creation of TaskSCD41 */
+  TaskSCD41Handle = osThreadNew(StartTaskSCD41, NULL, &TaskSCD41_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   free_heap = xPortGetFreeHeapSize();
@@ -874,32 +885,9 @@ void StartTaskInput(void *argument)
 		Error_Handler();
 	}
 
-	scd41_config_t scd41_config = {0};
-	scd41_context_t scd41_context = {0};
-
-	scd41_config.i2c_handle = &hi2c1;
-	scd41_config.i2c_mutex = MutexSCD41Handle;
-
-	scd4x_runtime_init(&scd41_config, &scd41_context);
-	scd4x_runtime_start_periodic_measurement(&scd41_config, &scd41_context);
-
-	uint32_t scd41_last_tick = osKernelGetTickCount();
-
   /* Infinite loop */
   for(;;)
   {
-	  /* Đọc encoder trước/sau service cảm biến để giảm mất bước khi I2C bận. */
-	  (void)rtrecd_service(&g_rtrecd, QueueEC11Handle);
-
-	  if ((osKernelGetTickCount() - scd41_last_tick) >= 500U)
-	  {
-		  scd41_last_tick = osKernelGetTickCount();
-		  Scd41Api_Service(&scd41_config,
-		                   &scd41_context,
-		                   QueueSCD41Handle,
-		                   scd4x_runtime_default_itm_fault_event_handler);
-	  }
-
 	  (void)rtrecd_service(&g_rtrecd, QueueEC11Handle);
 
 	  ramduinput = uxTaskGetStackHighWaterMark(NULL);
@@ -1257,6 +1245,39 @@ void StartTaskFanLearn(void *argument)
     osDelay(100U);
   }
   /* USER CODE END StartTaskFanLearn */
+}
+
+/* USER CODE BEGIN Header_StartTaskSCD41 */
+/**
+* @brief Function implementing the TaskSCD41 thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTaskSCD41 */
+void StartTaskSCD41(void *argument)
+{
+  /* USER CODE BEGIN StartTaskSCD41 */
+	scd41_config_t scd41_config = {0};
+	scd41_context_t scd41_context = {0};
+
+	scd41_config.i2c_handle = &hi2c1;
+	scd41_config.i2c_mutex = MutexSCD41Handle;
+
+	scd4x_runtime_init(&scd41_config, &scd41_context);
+	scd4x_runtime_start_periodic_measurement(&scd41_config, &scd41_context);
+
+  /* Infinite loop */
+  for(;;)
+  {
+	  (void)Scd41Api_Service(&scd41_config,
+	                         &scd41_context,
+	                         QueueSCD41Handle,
+	                         scd4x_runtime_default_itm_fault_event_handler);
+
+	  ramduscd41 = uxTaskGetStackHighWaterMark(NULL);
+	  osDelay(500);
+  }
+  /* USER CODE END StartTaskSCD41 */
 }
 
 /**
