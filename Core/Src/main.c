@@ -214,9 +214,9 @@ int main(void)
   /* USER CODE BEGIN 1 */
 	itm_set_library_enabled(ITM_LIB_RTRECD,  false);
 	itm_set_library_enabled(ITM_LIB_DS18B20, false);
-	itm_set_library_enabled(ITM_LIB_GLOBAL,  true);
+	itm_set_library_enabled(ITM_LIB_GLOBAL,  false);
 	itm_set_library_enabled(ITM_LIB_SCD41,   false);
-	itm_set_library_enabled(ITM_LIB_FAN,     true);
+	itm_set_library_enabled(ITM_LIB_FAN,     false);
 
 
   /* USER CODE END 1 */
@@ -1011,16 +1011,16 @@ void StartTaskLCD(void *argument)
 	    .mutex = MutexI2C2Handle,
 	};
 
-    itm_print("[LCD] init...\r\n");
+    //itm_print("[LCD] init...\r\n");
     lcd_init(&lcd_cfg);
-    itm_print("[LCD] init OK\r\n");
+    //itm_print("[LCD] init OK\r\n");
 
     /* Khởi tạo menu sau khi LCD đã sẵn sàng */
-    itm_print("[FLASH] app_menu_init -> load settings\r\n");
+    //itm_print("[FLASH] app_menu_init -> load settings\r\n");
     osMutexAcquire(MutexMenuHandle, osWaitForever);
     app_menu_init(&g_menu_ctx);
     osMutexRelease(MutexMenuHandle);
-    itm_print("[FLASH] app_menu_init done\r\n");
+    //itm_print("[FLASH] app_menu_init done\r\n");
 
   /* Infinite loop */
   for(;;)

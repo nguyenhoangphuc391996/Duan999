@@ -43,6 +43,17 @@ extern "C" {
 /** Tốc độ quạt mặc định (%) cho chế độ Chay to / Kich Dinh ghim / Dinh ghim / Qua the. */
 #define MODE_DEFAULT_FAN_PERCENT  100U
 
+/**
+ * Dải tuyệt đối khi chỉnh Min/Max (chung mọi chế độ, không theo giá trị mặc định từng mode).
+ * Vẫn phải thỏa Min < Max trong dải này.
+ */
+#define MINMAX_ABS_NHIET_DO_MIN   20
+#define MINMAX_ABS_NHIET_DO_MAX   100
+#define MINMAX_ABS_DO_AM_MIN      50
+#define MINMAX_ABS_DO_AM_MAX      95
+#define MINMAX_ABS_CO2_MIN        400
+#define MINMAX_ABS_CO2_MAX        5000
+
 /* =========================================================================
  * Enums
  * ========================================================================= */

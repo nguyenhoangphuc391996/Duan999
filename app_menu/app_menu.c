@@ -916,6 +916,236 @@ static void save_time_edit(app_menu_ctx_t *ctx)
  * MinMax edit helpers
  * ========================================================================= */
 
+static void get_minmax_range(app_menu_ctx_t *ctx, int32_t *vmin, int32_t *vmax);
+static void get_minmax_sensor_abs_range(const app_menu_ctx_t *ctx,
+                                        int32_t *vmin, int32_t *vmax);
+static int32_t get_minmax_value(app_menu_ctx_t *ctx);
+
+/** Nhiệt độ / độ ẩm / CO₂: chỉnh Min hoặc Max (không áp đèn, quạt, …). */
+static bool is_minmax_range_edit(const app_menu_ctx_t *ctx)
+{
+    if (ctx->edit_mode_index == 4U)
+    {
+        return (ctx->edit_param_index == TT_PARAM_NHIET_DO);
+    }
+    switch ((minmax_param_t)ctx->edit_param_index)
+    {
+    case PARAM_NHIET_DO:
+    case PARAM_DO_AM:
+    case PARAM_CO2:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool get_editing_minmax_range(const app_menu_ctx_t *ctx, minmax_range_t *out)
+{
+    const mode_settings_t *cfg = &ctx->mode_cfg[ctx->edit_mode_index];
+
+    if (ctx->edit_mode_index == 4U)
+    {
+        if (ctx->edit_param_index != TT_PARAM_NHIET_DO)
+        {
+            return false;
+        }
+        *out = cfg->nhiet_do;
+        return true;
+    }
+
+    switch ((minmax_param_t)ctx->edit_param_index)
+    {
+    case PARAM_NHIET_DO:
+        *out = cfg->nhiet_do;
+        return true;
+    case PARAM_DO_AM:
+        *out = cfg->do_am;
+        return true;
+    case PARAM_CO2:
+        *out = cfg->co2;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static int32_t minmax_range_edit_step(const app_menu_ctx_t *ctx)
+{
+    if ((ctx->edit_mode_index != 4U) &&
+        ((minmax_param_t)ctx->edit_param_index == PARAM_CO2))
+    {
+        return 100;
+    }
+    return 1;
+}
+
+/** Dải tuyệt đối chung cho Nhiệt / Ẩm / CO₂ (không đổi theo chế độ đang cài). */
+static void get_minmax_sensor_abs_range(const app_menu_ctx_t *ctx,
+                                        int32_t *vmin, int32_t *vmax)
+{
+    minmax_param_t param;
+
+    if (ctx->edit_mode_index == 4U)
+    {
+        param = PARAM_NHIET_DO;
+    }
+    else
+    {
+        param = (minmax_param_t)ctx->edit_param_index;
+    }
+
+    switch (param)
+    {
+    case PARAM_NHIET_DO:
+        *vmin = MINMAX_ABS_NHIET_DO_MIN;
+        *vmax = MINMAX_ABS_NHIET_DO_MAX;
+        break;
+    case PARAM_DO_AM:
+        *vmin = MINMAX_ABS_DO_AM_MIN;
+        *vmax = MINMAX_ABS_DO_AM_MAX;
+        break;
+    case PARAM_CO2:
+        *vmin = MINMAX_ABS_CO2_MIN;
+        *vmax = MINMAX_ABS_CO2_MAX;
+        break;
+    default:
+        *vmin = 0;
+        *vmax = 100;
+        break;
+    }
+}
+
+/**
+ * Giới hạn encoder Nhiệt / Ẩm / CO₂: trong dải chung + Min < Max.
+ */
+static void setup_minmax_edit_bounds(app_menu_ctx_t *ctx)
+{
+    minmax_range_t range;
+    int32_t step;
+    int32_t abs_min;
+    int32_t abs_max;
+    int32_t vmin;
+    int32_t vmax;
+
+    if (!get_editing_minmax_range(ctx, &range))
+    {
+        get_minmax_range(ctx, &vmin, &vmax);
+        ctx->edit_min = vmin;
+        ctx->edit_max = vmax;
+        return;
+    }
+
+    get_minmax_sensor_abs_range(ctx, &abs_min, &abs_max);
+    step = minmax_range_edit_step(ctx);
+
+    if (ctx->edit_field_index == 0U)
+    {
+        ctx->edit_min = abs_min;
+        ctx->edit_max = (int32_t)range.max - step;
+        if (ctx->edit_max > abs_max)
+        {
+            ctx->edit_max = abs_max;
+        }
+        if (ctx->edit_max < abs_min)
+        {
+            ctx->edit_max = abs_min;
+        }
+    }
+    else
+    {
+        ctx->edit_min = (int32_t)range.min + step;
+        ctx->edit_max = abs_max;
+        if (ctx->edit_min < abs_min)
+        {
+            ctx->edit_min = abs_min;
+        }
+        if (ctx->edit_min > abs_max)
+        {
+            ctx->edit_min = abs_max;
+        }
+    }
+
+    if (ctx->edit_value < ctx->edit_min)
+    {
+        ctx->edit_value = ctx->edit_min;
+    }
+    if (ctx->edit_value > ctx->edit_max)
+    {
+        ctx->edit_value = ctx->edit_max;
+    }
+}
+
+static minmax_range_t *minmax_range_ptr(mode_settings_t *cfg, const app_menu_ctx_t *ctx)
+{
+    if (ctx->edit_mode_index == 4U)
+    {
+        if (ctx->edit_param_index == TT_PARAM_NHIET_DO)
+        {
+            return &cfg->nhiet_do;
+        }
+        return NULL;
+    }
+
+    switch ((minmax_param_t)ctx->edit_param_index)
+    {
+    case PARAM_NHIET_DO:
+        return &cfg->nhiet_do;
+    case PARAM_DO_AM:
+        return &cfg->do_am;
+    case PARAM_CO2:
+        return &cfg->co2;
+    default:
+        return NULL;
+    }
+}
+
+/** Sau khi lưu: trong dải chung và Min < Max. */
+static void enforce_minmax_range_ordered(minmax_range_t *r,
+                                         int32_t abs_min, int32_t abs_max,
+                                         int32_t step)
+{
+    if (r->min < (int16_t)abs_min)
+    {
+        r->min = (int16_t)abs_min;
+    }
+    if (r->max > (int16_t)abs_max)
+    {
+        r->max = (int16_t)abs_max;
+    }
+    if (r->min >= r->max)
+    {
+        r->max = (int16_t)((int32_t)r->min + step);
+        if (r->max > (int16_t)abs_max)
+        {
+            r->max = (int16_t)abs_max;
+            r->min = (int16_t)((int32_t)abs_max - step);
+            if (r->min < (int16_t)abs_min)
+            {
+                r->min = (int16_t)abs_min;
+            }
+        }
+    }
+}
+
+static void enter_minmax_edit(app_menu_ctx_t *ctx)
+{
+    ctx->edit_value = get_minmax_value(ctx);
+    if (is_minmax_range_edit(ctx))
+    {
+        setup_minmax_edit_bounds(ctx);
+    }
+    else
+    {
+        int32_t vmin;
+        int32_t vmax;
+
+        get_minmax_range(ctx, &vmin, &vmax);
+        ctx->edit_min = vmin;
+        ctx->edit_max = vmax;
+    }
+    nav_push(ctx, SCREEN_MINMAX_EDIT);
+}
+
 static void get_minmax_range(app_menu_ctx_t *ctx,
                                int32_t *vmin, int32_t *vmax)
 {
@@ -924,9 +1154,8 @@ static void get_minmax_range(app_menu_ctx_t *ctx,
         switch (ctx->edit_param_index)
         {
         case TT_PARAM_NHIET_DO:
-            *vmin = 20;
-            *vmax = 100;
-            break;
+            get_minmax_sensor_abs_range(ctx, vmin, vmax);
+            return;
         case TT_PARAM_TIME_BD:
             *vmin = 0;
             *vmax = 600; /* phút */
@@ -947,11 +1176,10 @@ static void get_minmax_range(app_menu_ctx_t *ctx,
     switch ((minmax_param_t)ctx->edit_param_index)
     {
     case PARAM_NHIET_DO:
-        *vmin = 20;
-        *vmax = (ctx->edit_mode_index == 4U) ? 100 : 35;
+    case PARAM_DO_AM:
+    case PARAM_CO2:
+        get_minmax_sensor_abs_range(ctx, vmin, vmax);
         break;
-    case PARAM_DO_AM:    *vmin = 50;    *vmax = 95;    break; /* %RH     */
-    case PARAM_CO2:      *vmin = 400;   *vmax = 5000;  break; /* ppm     */
     case PARAM_DEN:
         /* Chỉ Time Start (0) và Time Stop (1) mới đến SCREEN_MINMAX_EDIT */
         *vmin = 0;
@@ -1034,6 +1262,14 @@ static void save_minmax_value(app_menu_ctx_t *ctx)
         default:
             break;
         }
+        if (ctx->edit_param_index == TT_PARAM_NHIET_DO)
+        {
+            int32_t abs_min;
+            int32_t abs_max;
+
+            get_minmax_sensor_abs_range(ctx, &abs_min, &abs_max);
+            enforce_minmax_range_ordered(&cfg->nhiet_do, abs_min, abs_max, 1);
+        }
         ctx->settings_dirty = true;
         return;
     }
@@ -1071,6 +1307,22 @@ static void save_minmax_value(app_menu_ctx_t *ctx)
     default:
         break;
     }
+
+    if (is_minmax_range_edit(ctx))
+    {
+        minmax_range_t *r = minmax_range_ptr(cfg, ctx);
+
+        if (r != NULL)
+        {
+            int32_t abs_min;
+            int32_t abs_max;
+
+            get_minmax_sensor_abs_range(ctx, &abs_min, &abs_max);
+            enforce_minmax_range_ordered(r, abs_min, abs_max,
+                                         minmax_range_edit_step(ctx));
+        }
+    }
+
     /* MinMax thay đổi, cần lưu Flash khi thoát menu */
     ctx->settings_dirty = true;
 }
@@ -1277,25 +1529,15 @@ static void handle_minmax_param(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
         if (ctx->edit_mode_index == 4U && ctx->edit_param_index != TT_PARAM_NHIET_DO)
         {
             /* Thoi gian BD, Mo muc to, Mo muc nho: đi thẳng vào edit */
-            int32_t vmin, vmax;
             ctx->edit_field_index = 0U;
-            get_minmax_range(ctx, &vmin, &vmax);
-            ctx->edit_min   = vmin;
-            ctx->edit_max   = vmax;
-            ctx->edit_value = get_minmax_value(ctx);
-            nav_push(ctx, SCREEN_MINMAX_EDIT);
+            enter_minmax_edit(ctx);
         }
         else if ((ctx->edit_mode_index != 4U) &&
                  (ctx->edit_param_index == (uint8_t)PARAM_TOC_DO_QUAT))
         {
             /* Tốc độ quạt: đi thẳng vào edit (0-100%) */
-            int32_t vmin, vmax;
             ctx->edit_field_index = 0U;
-            get_minmax_range(ctx, &vmin, &vmax);
-            ctx->edit_min   = vmin;
-            ctx->edit_max   = vmax;
-            ctx->edit_value = get_minmax_value(ctx);
-            nav_push(ctx, SCREEN_MINMAX_EDIT);
+            enter_minmax_edit(ctx);
         }
         else
         {
@@ -1372,16 +1614,9 @@ static void handle_minmax_field(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
                 list_ccw(ctx);
                 break;
             case RTRECD_EVENT_BUTTON_SHORT:
-            {
-                int32_t vmin, vmax;
                 ctx->edit_field_index = ctx->cursor; /* 0=Min, 1=Max */
-                get_minmax_range(ctx, &vmin, &vmax);
-                ctx->edit_min   = vmin;
-                ctx->edit_max   = vmax;
-                ctx->edit_value = get_minmax_value(ctx);
-                nav_push(ctx, SCREEN_MINMAX_EDIT);
+                enter_minmax_edit(ctx);
                 break;
-            }
             case RTRECD_EVENT_BUTTON_LONG:
                 ctx->do_am_field_level = 0U;  /* reset về cấp 1 khi pop */
                 nav_pop(ctx);
@@ -1452,16 +1687,9 @@ static void handle_minmax_field(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
                 list_ccw(ctx);
                 break;
             case RTRECD_EVENT_BUTTON_SHORT:
-            {
-                int32_t vmin, vmax;
                 ctx->edit_field_index = ctx->cursor; /* 0=Time Start, 1=Time Stop */
-                get_minmax_range(ctx, &vmin, &vmax);
-                ctx->edit_min   = vmin;
-                ctx->edit_max   = vmax;
-                ctx->edit_value = get_minmax_value(ctx);
-                nav_push(ctx, SCREEN_MINMAX_EDIT);
+                enter_minmax_edit(ctx);
                 break;
-            }
             case RTRECD_EVENT_BUTTON_LONG:
                 ctx->den_field_level = 0U;  /* reset về cấp 1 khi pop */
                 nav_pop(ctx);
@@ -1483,16 +1711,9 @@ static void handle_minmax_field(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
         list_ccw(ctx);
         break;
     case RTRECD_EVENT_BUTTON_SHORT:
-    {
-        int32_t vmin, vmax;
         ctx->edit_field_index = ctx->cursor;
-        get_minmax_range(ctx, &vmin, &vmax);
-        ctx->edit_min   = vmin;
-        ctx->edit_max   = vmax;
-        ctx->edit_value = get_minmax_value(ctx);
-        nav_push(ctx, SCREEN_MINMAX_EDIT);
+        enter_minmax_edit(ctx);
         break;
-    }
     case RTRECD_EVENT_BUTTON_LONG:
         nav_pop(ctx);
         break;
@@ -1503,13 +1724,7 @@ static void handle_minmax_field(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 
 static void handle_minmax_edit(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 {
-    /* Bước nhảy: CO2 = 100 ppm/bước (chỉ áp dụng ngoài chế độ Thanh trùng), các thông số khác = 1 */
-    int32_t step = 1;
-    if ((ctx->edit_mode_index != 4U) &&
-        ((minmax_param_t)ctx->edit_param_index == PARAM_CO2))
-    {
-        step = 100;
-    }
+    int32_t step = minmax_range_edit_step(ctx);
     switch (ev)
     {
     case RTRECD_EVENT_ROTATE_CW:
@@ -1833,15 +2048,9 @@ void app_menu_init(app_menu_ctx_t *ctx)
     }
     ctx->servo_learn_active         = 0U;
 
-    /* MinMax mặc định cho cả 5 chế độ */
+    /* Cài đặt chung cho cả 5 chế độ (MinMax từng mode: xem khối [0]..[4] bên dưới) */
     for (uint8_t i = 0U; i < 5U; i++)
     {
-        ctx->mode_cfg[i].nhiet_do.min = 20;
-        ctx->mode_cfg[i].nhiet_do.max = 35;
-        ctx->mode_cfg[i].do_am.min    = 50;
-        ctx->mode_cfg[i].do_am.max    = 95;
-        ctx->mode_cfg[i].co2.min      = 400;
-        ctx->mode_cfg[i].co2.max      = 2000;
         ctx->mode_cfg[i].den.time_start_h = 6U;
         ctx->mode_cfg[i].den.time_start_m = 0U;
         ctx->mode_cfg[i].den.time_stop_h  = 20U;

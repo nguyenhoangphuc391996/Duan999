@@ -56,7 +56,7 @@ extern "C" {
 /** < 100 RPM liên tục N giây → kích hoạt lỗi cơ học. */
 #define FAN_LOW_SPEED_FAULT_SEC       2U
 /** Ngưỡng sai số so với RPM đã học (±%). */
-#define FAN_LEARN_TOLERANCE_PERCENT   15U
+#define FAN_LEARN_TOLERANCE_PERCENT   20U
 /** Sàn sai số tuyệt đối (RPM) – tránh báo nhầm do lượng tử hoá TACH. */
 #define FAN_LEARN_TOLERANCE_RPM_MIN   60U
 /** Chu kỳ lặp giám sát profile khi duty/chế độ đã ổn định (ms). */

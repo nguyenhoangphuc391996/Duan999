@@ -46,7 +46,7 @@ servo_config_t servo_cfg = {
 ## Init
 
 ```c
-//khai báo 
+
 servo_t servo;
 
 servo_defaults(&servo);
