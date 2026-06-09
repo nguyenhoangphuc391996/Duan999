@@ -64,7 +64,7 @@ typedef struct
 	uint16_t thanh_trung_initial_minutes;
 	uint8_t sg90_mo_to_pct;
 	uint8_t sg90_mo_nho_pct;
-	output_servo_cal_t servo_cal;
+	servo_cal_t servo_cal;
 	bool servo_learn_active;
 	uint8_t servo_learn_servo;
 	uint8_t servo_learn_angle_deg;

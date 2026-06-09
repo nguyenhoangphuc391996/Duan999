@@ -1155,13 +1155,17 @@ void StartTaskOutput(void *argument)
     osDelay(10U);
   }
 
+  servo_config_t servo_cfg = SERVO_BOARD_DEFAULT_CONFIG(&htim1);
+
   output_defaults(&g_output);
   g_output.fan.htim = &htim2;
-  g_output.servo1.htim = &htim1;
-  g_output.servo2.htim = &htim1;
   osMutexAcquire(MutexMenuHandle, osWaitForever);
-  output_servo_apply_cal(&g_output, &g_menu_ctx.servo_cal);
+  servo_apply_cal(&g_output.servo, &g_menu_ctx.servo_cal);
   osMutexRelease(MutexMenuHandle);
+  if (!servo_init(&g_output.servo, &servo_cfg))
+  {
+    Error_Handler();
+  }
   if (output_init(&g_output) == false)
   {
     Error_Handler();
@@ -1180,25 +1184,25 @@ void StartTaskOutput(void *argument)
       bool servo_learn_active = false;
 
       osMutexAcquire(MutexMenuHandle, osWaitForever);
-      output_servo_apply_cal(&g_output, &g_menu_ctx.servo_cal);
+      servo_apply_cal(&g_output.servo, &g_menu_ctx.servo_cal);
       servo_learn_active = (g_menu_ctx.servo_learn_active != 0U);
       if (servo_learn_active)
       {
-        output_servo_set_learn_preview(&g_output,
-                                       (uint8_t)(g_menu_ctx.servo_learn_servo + 1U),
-                                       g_menu_ctx.servo_learn_angle_deg);
+        servo_set_learn_preview(&g_output.servo,
+                                g_menu_ctx.servo_learn_servo,
+                                g_menu_ctx.servo_learn_angle_deg);
       }
       osMutexRelease(MutexMenuHandle);
 
       if (servo_learn_was_active && !servo_learn_active)
       {
-        output_servo_resync_all(&g_output);
+        servo_resync_all(&g_output.servo);
       }
       servo_learn_was_active = servo_learn_active;
 
       if (!servo_learn_active)
       {
-        output_servo_ramp_update(&g_output, now_tick);
+        servo_ramp_update(&g_output.servo, now_tick);
       }
     }
 

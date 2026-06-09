@@ -78,8 +78,12 @@ static const char * const g_main_menu_items[] = {
 static const char * const g_servo_learn_items[] = {
     "Servo 1",
     "Servo 2",
+    /* Thêm dòng khi tăng SERVO_COUNT (vd. "Servo 3") */
 };
-#define SERVO_LEARN_ITEM_COUNT  2U
+#define SERVO_LEARN_ITEM_COUNT  SERVO_COUNT
+
+_Static_assert(SERVO_COUNT <= (sizeof(g_servo_learn_items) / sizeof(g_servo_learn_items[0])),
+               "g_servo_learn_items thieu muc cho SERVO_COUNT");
 
 static const char * const g_servo_learn_side_items[] = {
     "Hoc goc dong",
@@ -1659,19 +1663,15 @@ static void handle_fan_learn_menu(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 
 static uint8_t *servo_learn_cal_ptr(app_menu_ctx_t *ctx)
 {
-    if (ctx->servo_learn_servo == 0U)
+    if (ctx->servo_learn_servo >= SERVO_COUNT)
     {
-        if (ctx->servo_learn_side == 0U)
-        {
-            return &ctx->servo_cal.servo1_close_deg;
-        }
-        return &ctx->servo_cal.servo1_open_deg;
+        return &ctx->servo_cal.close_deg[0];
     }
     if (ctx->servo_learn_side == 0U)
     {
-        return &ctx->servo_cal.servo2_close_deg;
+        return &ctx->servo_cal.close_deg[ctx->servo_learn_servo];
     }
-    return &ctx->servo_cal.servo2_open_deg;
+    return &ctx->servo_cal.open_deg[ctx->servo_learn_servo];
 }
 
 static void enter_servo_learn_edit(app_menu_ctx_t *ctx)
@@ -1826,10 +1826,11 @@ void app_menu_init(app_menu_ctx_t *ctx)
     ctx->ds18b20_target_count = 4U;
 
     /* Góc servo mặc định (trước khi load Flash) */
-    ctx->servo_cal.servo1_close_deg = OUTPUT_SERVO_ANGLE_MIN_DEG;
-    ctx->servo_cal.servo1_open_deg  = OUTPUT_SERVO_ANGLE_MAX_DEG;
-    ctx->servo_cal.servo2_close_deg = OUTPUT_SERVO_ANGLE_MIN_DEG;
-    ctx->servo_cal.servo2_open_deg  = OUTPUT_SERVO_ANGLE_MAX_DEG;
+    for (uint8_t i = 0U; i < SERVO_COUNT; i++)
+    {
+        ctx->servo_cal.close_deg[i] = SERVO_ANGLE_MIN_DEG;
+        ctx->servo_cal.open_deg[i]  = SERVO_ANGLE_MAX_DEG;
+    }
     ctx->servo_learn_active         = 0U;
 
     /* MinMax mặc định cho cả 5 chế độ */

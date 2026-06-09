@@ -28,6 +28,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 #include "fan.h"           /* fan_state_t, FAN_LEARN_* constants, FAN_LEARN_STEPS */
+#include "servo.h"         /* servo_cal_t, SERVO_ANGLE_* */
 #include "rtrecd.h"
 #include "scd4x_i2c.h"
 #include "ds18b20_app.h"
@@ -230,9 +231,9 @@ struct app_menu_ctx_s
     fan_state_t      fan;  /**< Học RPM + cảnh báo + an toàn; truy cập qua MutexMenuHandle */
 
     /* --- Học góc servo SG90 --- */
-    output_servo_cal_t servo_cal;
+    servo_cal_t      servo_cal;
     volatile uint8_t   servo_learn_active;
-    uint8_t            servo_learn_servo;   /**< 0=servo1, 1=servo2 */
+    uint8_t            servo_learn_servo;   /**< Chi so 0..SERVO_COUNT-1 */
     uint8_t            servo_learn_side;    /**< 0=đóng, 1=mở */
     volatile uint8_t   servo_learn_angle_deg;
     uint8_t            servo_learn_saved_deg;

@@ -53,8 +53,8 @@ static void output_ctrl_warmup_only(output_t *h, const output_ctrl_snapshot_t *s
 	output_heater_set(h, false);
 	output_mist_set(h, false);
 	output_lamp_set(h, false);
-	output_servo1_set_angle(h, output_servo_close_deg(h, 0U));
-	output_servo2_set_angle(h, output_servo_close_deg(h, 1U));
+	servo_set_angle(&h->servo, 0U, servo_close_deg(&h->servo, 0U));
+	servo_set_angle(&h->servo, 1U, servo_close_deg(&h->servo, 1U));
 
 	if (s->fan_learn_active)
 	{
@@ -207,12 +207,11 @@ bool output_ctrl_apply(output_t *h,
 		return false;
 	}
 
-	output_servo_apply_cal(h, &s->servo_cal);
+	servo_apply_cal(&h->servo, &s->servo_cal);
 
 	if (s->servo_learn_active)
 	{
-		uint8_t servo_num = (uint8_t)(s->servo_learn_servo + 1U);
-		output_servo_set_learn_preview(h, servo_num, s->servo_learn_angle_deg);
+		servo_set_learn_preview(&h->servo, s->servo_learn_servo, s->servo_learn_angle_deg);
 		return true;
 	}
 
@@ -287,7 +286,7 @@ bool output_ctrl_apply(output_t *h,
 		output_mist_set(h, false);
 		output_lamp_set(h, false);
 		output_fan_set_percent(h, 0U);
-		output_servo2_set_angle(h, output_servo_close_deg(h, 1U));
+		servo_set_angle(&h->servo, 1U, servo_close_deg(&h->servo, 1U));
 
 		{
 			uint32_t elapsed_ms = now_tick - st->thanh_trung_start_tick;
@@ -295,22 +294,22 @@ bool output_ctrl_apply(output_t *h,
 			uint8_t angle_to;
 			uint8_t angle_nho;
 
-			angle_to = output_servo_angle_from_percent(h, 0U, s->sg90_mo_to_pct);
-			angle_nho = output_servo_angle_from_percent(h, 0U, s->sg90_mo_nho_pct);
+			angle_to = servo_angle_from_percent(&h->servo, 0U, s->sg90_mo_to_pct);
+			angle_nho = servo_angle_from_percent(&h->servo, 0U, s->sg90_mo_nho_pct);
 
 			if (elapsed_ms < initial_ms)
 			{
-				output_servo1_set_angle(h, angle_to);
+				servo_set_angle(&h->servo, 0U, angle_to);
 			}
 			else if (s->valid_temp)
 			{
 				if (s->temp_c > s->temp_max)
 				{
-					output_servo1_set_angle(h, angle_to);
+					servo_set_angle(&h->servo, 0U, angle_to);
 				}
 				else if (s->temp_c < s->temp_min)
 				{
-					output_servo1_set_angle(h, angle_nho);
+					servo_set_angle(&h->servo, 0U, angle_nho);
 				}
 			}
 		}
@@ -349,13 +348,13 @@ bool output_ctrl_apply(output_t *h,
 	{
 		if (s->co2_ppm > (uint16_t)s->co2_max)
 		{
-			output_servo1_set_angle(h, output_servo_open_deg(h, 0U));
-			output_servo2_set_angle(h, output_servo_open_deg(h, 1U));
+			servo_set_angle(&h->servo, 0U, servo_open_deg(&h->servo, 0U));
+			servo_set_angle(&h->servo, 1U, servo_open_deg(&h->servo, 1U));
 		}
 		else if (s->co2_ppm < (uint16_t)s->co2_min)
 		{
-			output_servo1_set_angle(h, output_servo_close_deg(h, 0U));
-			output_servo2_set_angle(h, output_servo_close_deg(h, 1U));
+			servo_set_angle(&h->servo, 0U, servo_close_deg(&h->servo, 0U));
+			servo_set_angle(&h->servo, 1U, servo_close_deg(&h->servo, 1U));
 		}
 	}
 

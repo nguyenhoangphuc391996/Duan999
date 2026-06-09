@@ -150,19 +150,19 @@ void app_settings_load(app_menu_ctx_t *ctx)
     {
         if (fs->servo1_close_deg <= 180U)
         {
-            ctx->servo_cal.servo1_close_deg = fs->servo1_close_deg;
+            ctx->servo_cal.close_deg[0] = fs->servo1_close_deg;
         }
         if (fs->servo1_open_deg <= 180U)
         {
-            ctx->servo_cal.servo1_open_deg = fs->servo1_open_deg;
+            ctx->servo_cal.open_deg[0] = fs->servo1_open_deg;
         }
         if (fs->servo2_close_deg <= 180U)
         {
-            ctx->servo_cal.servo2_close_deg = fs->servo2_close_deg;
+            ctx->servo_cal.close_deg[1] = fs->servo2_close_deg;
         }
         if (fs->servo2_open_deg <= 180U)
         {
-            ctx->servo_cal.servo2_open_deg = fs->servo2_open_deg;
+            ctx->servo_cal.open_deg[1] = fs->servo2_open_deg;
         }
     }
 
@@ -184,10 +184,10 @@ void app_settings_save(app_menu_ctx_t *ctx)
     memcpy(s.fan_learned_rpm, ctx->fan.learned_rpm, sizeof(s.fan_learned_rpm));
     s.fan_learn_done = ctx->fan.learn_done;
     s._pad_fan       = 0U;
-    s.servo1_close_deg = ctx->servo_cal.servo1_close_deg;
-    s.servo1_open_deg  = ctx->servo_cal.servo1_open_deg;
-    s.servo2_close_deg = ctx->servo_cal.servo2_close_deg;
-    s.servo2_open_deg  = ctx->servo_cal.servo2_open_deg;
+    s.servo1_close_deg = ctx->servo_cal.close_deg[0];
+    s.servo1_open_deg  = ctx->servo_cal.open_deg[0];
+    s.servo2_close_deg = ctx->servo_cal.close_deg[1];
+    s.servo2_open_deg  = ctx->servo_cal.open_deg[1];
     s.checksum    = calc_checksum(&s);
 
     /* ---- Ghi Flash ---- */
