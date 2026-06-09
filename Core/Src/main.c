@@ -1139,10 +1139,29 @@ void StartTaskOutput(void *argument)
   static bool servo_learn_was_active = false;
 
   output_ctrl_state_init(&ctrl);
+
+  /* Đợi TaskLCD nạp Flash (servo_cal) trước khi khởi tạo PWM servo. */
+  for (;;)
+  {
+    uint8_t menu_ready = 0U;
+
+    osMutexAcquire(MutexMenuHandle, osWaitForever);
+    menu_ready = g_menu_ctx.menu_inited;
+    osMutexRelease(MutexMenuHandle);
+    if (menu_ready != 0U)
+    {
+      break;
+    }
+    osDelay(10U);
+  }
+
   output_defaults(&g_output);
   g_output.fan.htim = &htim2;
   g_output.servo1.htim = &htim1;
   g_output.servo2.htim = &htim1;
+  osMutexAcquire(MutexMenuHandle, osWaitForever);
+  output_servo_apply_cal(&g_output, &g_menu_ctx.servo_cal);
+  osMutexRelease(MutexMenuHandle);
   if (output_init(&g_output) == false)
   {
     Error_Handler();

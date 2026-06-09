@@ -1906,6 +1906,8 @@ void app_menu_init(app_menu_ctx_t *ctx)
      * Nếu Flash chưa có dữ liệu, giữ nguyên giá trị mặc định.
      */
     app_settings_load(ctx);
+
+    ctx->menu_inited = 1U;
 }
 
 void app_menu_handle_event(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)

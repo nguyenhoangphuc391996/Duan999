@@ -237,6 +237,9 @@ struct app_menu_ctx_s
     volatile uint8_t   servo_learn_angle_deg;
     uint8_t            servo_learn_saved_deg;
 
+    /** 1 sau @ref app_menu_init (Flash đã nạp); TaskOutput đợi cờ này. */
+    volatile uint8_t   menu_inited;
+
 };
 
 /* =========================================================================

@@ -48,6 +48,9 @@ static void output_pwm_set_compare(output_pwm_ch_t *ch, uint16_t pulse_ticks);
 /** Góc tuyệt đối 0..180 (cùng thang LCD khi học) → xung PWM. */
 static uint16_t output_angle_to_pulse_ticks(const output_t *h, uint8_t angle_deg);
 static uint8_t output_pulse_to_angle_deg(const output_t *h, uint16_t pulse_ticks);
+static void output_servo_apply_permille(output_t *h, uint8_t servo_idx,
+                                        output_pwm_ch_t *ch, uint8_t *angle_deg,
+                                        int16_t permille);
 
 static uint8_t output_servo_close_ep(const output_t *h, uint8_t servo_idx)
 {
@@ -69,15 +72,29 @@ static uint8_t output_servo_open_ep(const output_t *h, uint8_t servo_idx)
 
 void output_servo_apply_cal(output_t *h, const output_servo_cal_t *cal)
 {
+	bool changed;
+
 	if ((h == NULL) || (cal == NULL))
 	{
 		return;
 	}
 
+	changed = (h->servo1_close_deg != cal->servo1_close_deg)
+	          || (h->servo1_open_deg != cal->servo1_open_deg)
+	          || (h->servo2_close_deg != cal->servo2_close_deg)
+	          || (h->servo2_open_deg != cal->servo2_open_deg);
+
 	h->servo1_close_deg = cal->servo1_close_deg;
 	h->servo1_open_deg  = cal->servo1_open_deg;
 	h->servo2_close_deg = cal->servo2_close_deg;
 	h->servo2_open_deg  = cal->servo2_open_deg;
+
+	/* Cùng permille nhưng đóng/mở đổi → góc PWM phải tính lại (sau reset / load Flash). */
+	if (changed && h->initialized)
+	{
+		output_servo_apply_permille(h, 0U, &h->servo1, &h->servo1_angle_deg, h->servo1_permille);
+		output_servo_apply_permille(h, 1U, &h->servo2, &h->servo2_angle_deg, h->servo2_permille);
+	}
 }
 
 uint8_t output_servo_close_deg(const output_t *h, uint8_t servo_idx)
